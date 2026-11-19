@@ -3,9 +3,11 @@
 import argparse
 import os
 import sys
+import time
 from typing import Never, override
 
-from . import config
+from . import config, entries, processes, sweep
+from .rules import Context
 
 
 class _Parser(argparse.ArgumentParser):
@@ -38,7 +40,7 @@ def main() -> int:
         "-n", dest="dry_run", action="store_true", help="show what would be removed"
     )
     parser.add_argument(
-        "-v", dest="verbose", action="store_true", help="show reasons for kept entries"
+        "-v", dest="verbose", action="store_true", help="show kept entries and removals"
     )
     parser.add_argument(
         "-d",
@@ -57,10 +59,19 @@ def main() -> int:
         help="idle days before scratch removal (default: %(default)s)",
     )
     options = parser.parse_args(namespace=_Options())
+    uid = os.getuid()
     try:
-        config.load(
-            path, os.getuid(), depth=options.depth, scratch_days=options.scratch_days
+        settings = config.load(
+            path, uid, depth=options.depth, scratch_days=options.scratch_days
         )
     except config.ConfigError as error:
         parser.error(str(error))
-    return 0
+    context = Context(
+        settings=settings,
+        now_ns=time.time_ns(),
+        uid=uid,
+        processes=processes.observe(),
+        newest_change=entries.newest_change,
+        empty_dir=entries.empty_dir,
+    )
+    return sweep.run(context, dry_run=options.dry_run, verbose=options.verbose)
