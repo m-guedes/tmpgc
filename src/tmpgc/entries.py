@@ -3,6 +3,7 @@
 import os
 import stat
 from collections.abc import Generator, Iterator
+from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -10,6 +11,9 @@ from fnmatch import fnmatchcase
 
 _SCAN_ERRORS = (FileNotFoundError, NotADirectoryError, PermissionError)
 _DIRECTORY_FLAGS = os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+type FileId = tuple[int, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +30,11 @@ class Entry:
 class Tree:
     allocated_kib: int
     last_activity_ns: int
+    in_use: bool
+
+
+def file_id(info: os.stat_result) -> FileId:
+    return info.st_dev, info.st_ino
 
 
 @contextmanager
@@ -142,13 +151,16 @@ def empty_dir(path: str) -> bool:
         return False
 
 
-def measure(path: str) -> Tree | None:
+def measure(path: str, held: AbstractSet[FileId]) -> Tree | None:
     blocks = 0
     last_activity_ns: int | None = None
-    linked: set[tuple[int, int]] = set()
+    in_use = False
+    linked: set[FileId] = set()
     for entry in walk(path):
         info = entry.info
+        identity = file_id(info)
         directory = stat.S_ISDIR(info.st_mode)
+        in_use = in_use or identity in held
         activity_ns = max(info.st_mtime_ns, info.st_ctime_ns)
         # Directory listings advance atime, including listings by this scan.
         if not directory:
@@ -159,7 +171,6 @@ def measure(path: str) -> Tree | None:
             else max(last_activity_ns, activity_ns)
         )
         if info.st_nlink > 1 and not directory:
-            identity = (info.st_dev, info.st_ino)
             if identity in linked:
                 continue
             linked.add(identity)
@@ -167,4 +178,4 @@ def measure(path: str) -> Tree | None:
     if last_activity_ns is None:
         return None
     # Linux st_blocks counts 512-byte blocks. du -sk rounds the tree's sum to KiB.
-    return Tree((blocks + 1) // 2, last_activity_ns)
+    return Tree((blocks + 1) // 2, last_activity_ns, in_use)

@@ -23,7 +23,7 @@ class RuleTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.trees = {
-            f"/tmp/{name}": Tree(_ALLOCATED_KIB, self.now_ns)
+            f"/tmp/{name}": Tree(_ALLOCATED_KIB, self.now_ns, in_use=False)
             for name in ("MSBuildTempRecent", "scratch-recent")
         }
         self.context = Context(
@@ -31,12 +31,7 @@ class RuleTests(unittest.TestCase):
             processes=Processes(
                 {42: (Process(100, self.uid),)},
                 frozenset({"/tmp/bound.sock"}),
-                frozenset(
-                    {
-                        "/tmp/scratch-held/child/open",
-                        "/tmp/unrelated/tmp/scratch-idle/open",
-                    }
-                ),
+                frozenset(),
                 boot_ns=self.now_ns - (_DEFAULT_AGE_SECONDS + 1) * _SECOND_NS,
                 ticks_per_second=100,
             ),
@@ -68,7 +63,7 @@ class RuleTests(unittest.TestCase):
             (mode, 0, 0, 1, self.uid, 0, 0, 0, 0, 0), {"st_mtime_ns": timestamp}
         )
         entry = Entry(f"/tmp/{name}", info)
-        self.trees.setdefault(entry.path, Tree(_ALLOCATED_KIB, timestamp))
+        self.trees.setdefault(entry.path, Tree(_ALLOCATED_KIB, timestamp, in_use=False))
         kind = classify(entry, origin, self.uid)
         return None if kind is None else decide(entry, kind, self.context)
 
@@ -204,13 +199,14 @@ class RuleTests(unittest.TestCase):
             self._decision("NotEmp", stat.S_IFDIR, origin=Origin.TEMPORARY_ROOT)
         )
 
-    def test_removes_idle_scratch_when_its_path_is_only_a_substring(self) -> None:
+    def test_removes_idle_unused_scratch(self) -> None:
         self.assertEqual(
             self._decision("scratch-idle", stat.S_IFDIR, origin=Origin.SCRATCH_PATTERN),
             Decision(Kind.SCRATCH, Verdict.REMOVE, "scratch idle >3d", _ALLOCATED_KIB),
         )
 
-    def test_keeps_idle_scratch_with_held_descendant(self) -> None:
+    def test_keeps_idle_scratch_in_use(self) -> None:
+        self.trees["/tmp/scratch-held"] = Tree(_ALLOCATED_KIB, 0, in_use=True)
         self.assertEqual(
             self._decision("scratch-held", stat.S_IFDIR, origin=Origin.SCRATCH_PATTERN),
             Decision(Kind.SCRATCH, Verdict.KEEP, "scratch held by a live process"),

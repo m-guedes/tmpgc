@@ -4,5 +4,6 @@ Description=Remove stale build and agent litter from /tmp
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/tmpgc
+TimeoutStartSec=15min
 Nice=19
 IOSchedulingClass=idle

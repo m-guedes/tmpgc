@@ -114,12 +114,6 @@ def _idle(tree: Tree, minutes: int, context: Context) -> bool:
     return tree.last_activity_ns < context.now_ns - minutes * _MINUTE_NS
 
 
-def _held(path: str, context: Context) -> bool:
-    targets = context.processes.held_paths
-    path = path.rstrip("/")
-    return path in targets or any(target.startswith(f"{path}/") for target in targets)
-
-
 def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
     path = entry.path
     name = entry.name
@@ -178,7 +172,7 @@ def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
             days = context.settings.scratch_days
             if not _idle(tree, days * 24 * 60, context):
                 return Decision(kind, Verdict.KEEP, f"scratch touched within {days}d")
-            if _held(path, context):
+            if tree.in_use:
                 return Decision(kind, Verdict.KEEP, "scratch held by a live process")
             return Decision(
                 kind, Verdict.REMOVE, f"scratch idle >{days}d", tree.allocated_kib

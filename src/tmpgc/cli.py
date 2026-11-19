@@ -66,12 +66,14 @@ def main() -> int:
         )
     except config.ConfigError as error:
         parser.error(str(error))
+    now_ns = time.time_ns()
+    observed = processes.observe()
     context = Context(
         settings=settings,
-        now_ns=time.time_ns(),
+        now_ns=now_ns,
         uid=uid,
-        processes=processes.observe(),
-        tree=entries.measure,
+        processes=observed,
+        tree=lambda path: entries.measure(path, observed.held),
         empty_dir=entries.empty_dir,
     )
     return sweep.run(context, dry_run=options.dry_run, verbose=options.verbose)

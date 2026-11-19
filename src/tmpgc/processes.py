@@ -1,11 +1,13 @@
 """Observe liveness through Linux procfs."""
 
+import errno
 import os
 from collections.abc import Iterator, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import SCAN_ROOT
+from .entries import FileId, file_id
 
 
 _PROCESS_ERRORS = (FileNotFoundError, PermissionError, ProcessLookupError)
@@ -22,7 +24,7 @@ class Process:
 class Processes:
     holders: Mapping[int, tuple[Process, ...]]
     bound_sockets: frozenset[str]
-    held_paths: frozenset[str]
+    held: frozenset[FileId]
     boot_ns: int
     ticks_per_second: int
 
@@ -90,21 +92,29 @@ def _bound_sockets(process: Path, namespaces: set[str]) -> Iterator[str]:
             yield os.fsdecode(fields[7])
 
 
-def _temporary_target(link: str | Path) -> Iterator[str]:
-    try:
-        target = os.readlink(link)
-    except _PROCESS_ERRORS:
-        return
-    if target.startswith(f"{SCAN_ROOT}/"):
-        yield target
+def _held(process: Path) -> Iterator[FileId]:
+    def link_id(link: str | Path) -> Iterator[FileId]:
+        try:
+            yield file_id(os.stat(link))
+        except _PROCESS_ERRORS:
+            return
+        except OSError as error:
+            if error.errno != errno.ESTALE:
+                raise
 
+    yield from link_id(process / "cwd")
+    with suppress(*_PROCESS_ERRORS), os.scandir(process / "fd") as descriptors:
+        for descriptor in descriptors:
+            yield from link_id(descriptor.path)
 
-def _held_paths(process: Path) -> Iterator[str]:
-    yield from _temporary_target(process / "cwd")
     try:
-        with os.scandir(process / "fd") as descriptors:
-            for descriptor in descriptors:
-                yield from _temporary_target(descriptor.path)
+        with (process / "maps").open("rb") as maps:
+            for line in maps:
+                fields = line.split(maxsplit=5)
+                if inode := int(fields[4]):
+                    # The device is printed in hex (Linux man-pages, proc_pid_maps(5), 2026).
+                    major, minor = fields[3].split(b":")
+                    yield os.makedev(int(major, 16), int(minor, 16)), inode
     except _PROCESS_ERRORS:
         return
 
@@ -121,18 +131,18 @@ def _boot_ns() -> int:
 def observe() -> Processes:
     holders: dict[int, list[Process]] = {}
     sockets: set[str] = set()
-    paths: set[str] = set()
+    held: set[FileId] = set()
     namespaces: set[str] = set()
     for process in Path("/proc").iterdir():
         if process.name.isdecimal():
             for pid, holder in _process_holders(process):
                 holders.setdefault(pid, []).append(holder)
             sockets.update(_bound_sockets(process, namespaces))
-            paths.update(_held_paths(process))
+            held.update(_held(process))
     return Processes(
         {pid: tuple(processes) for pid, processes in holders.items()},
         frozenset(sockets),
-        frozenset(paths),
+        frozenset(held),
         boot_ns=_boot_ns(),
         ticks_per_second=os.sysconf("SC_CLK_TCK"),
     )

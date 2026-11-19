@@ -24,7 +24,7 @@ class EntryTests(TreeTestCase):
         ):
             with self.subTest(path=path, times=times):
                 os.utime(path, ns=times)
-                tree = measure(str(self.root))
+                tree = measure(str(self.root), frozenset())
                 assert tree is not None
                 self.assertEqual(tree.last_activity_ns, expected)
 
