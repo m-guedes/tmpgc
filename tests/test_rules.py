@@ -3,10 +3,11 @@
 import os
 import stat
 import unittest
+from dataclasses import replace
 
 from tmpgc.config import Settings
 from tmpgc.entries import Entry
-from tmpgc.processes import Processes
+from tmpgc.processes import Process, Processes
 from tmpgc.rules import Context, Decision, Kind, Origin, Verdict, classify, decide
 
 
@@ -22,7 +23,7 @@ class RuleTests(unittest.TestCase):
         self.context = Context(
             settings=Settings(("/tmp",), ()),
             processes=Processes(
-                frozenset({42}),
+                {42: (Process(100),)},
                 frozenset({"/tmp/bound.sock"}),
                 frozenset(
                     {
@@ -88,6 +89,24 @@ class RuleTests(unittest.TestCase):
         )
 
     def test_keeps_debugger_pipe_for_live_pid(self) -> None:
+        self.assertEqual(
+            self._decision("clr-debug-pipe-42-100-in", stat.S_IFIFO),
+            Decision(Kind.DEBUGGER_PIPE, Verdict.KEEP, "pid 42 alive"),
+        )
+
+    def test_removes_debugger_pipe_when_pid_was_reused(self) -> None:
+        self.assertEqual(
+            self._decision("clr-debug-pipe-42-99-out", stat.S_IFIFO),
+            Decision(Kind.DEBUGGER_PIPE, Verdict.REMOVE, "stale clr-debug-pipe"),
+        )
+
+    def test_keeps_debugger_pipe_when_one_pid_holder_matches(self) -> None:
+        self.context = replace(
+            self.context,
+            processes=replace(
+                self.context.processes, holders={42: (Process(1), Process(100))}
+            ),
+        )
         self.assertEqual(
             self._decision("clr-debug-pipe-42-100-in", stat.S_IFIFO),
             Decision(Kind.DEBUGGER_PIPE, Verdict.KEEP, "pid 42 alive"),

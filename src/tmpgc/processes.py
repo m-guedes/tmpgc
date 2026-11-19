@@ -1,7 +1,7 @@
 """Observe liveness through Linux procfs."""
 
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,21 +12,49 @@ _PROCESS_ERRORS = (FileNotFoundError, PermissionError, ProcessLookupError)
 
 
 @dataclass(frozen=True, slots=True)
+class Process:
+    start_ticks: int
+
+
+@dataclass(frozen=True, slots=True)
 class Processes:
-    live_pids: frozenset[int]
+    holders: Mapping[int, tuple[Process, ...]]
     bound_sockets: frozenset[str]
     held_paths: frozenset[str]
 
+    def started_at(self, pid: int, start_ticks: int) -> bool:
+        return any(
+            holder.start_ticks == start_ticks for holder in self.holders.get(pid, ())
+        )
 
-def _namespace_pids(process: Path) -> Iterator[int]:
+
+def _process_holders(process: Path) -> Iterator[tuple[int, Process]]:
+    def open_file(name: str, flags: int) -> int:
+        return os.open(name, flags, dir_fd=fd)
+
     try:
-        with (process / "status").open("rb") as status:
-            for line in status:
-                if line.startswith(b"NSpid:"):
-                    yield from map(int, line.split()[1:])
-                    return
+        # A directory descriptor keeps both reads on the same process across PID
+        # reuse (Linux kernel documentation, The /proc Filesystem, 2009).
+        fd = os.open(process, os.O_PATH | os.O_DIRECTORY)
+        try:
+            with open("status", "rb", opener=open_file) as status:
+                pids = next(
+                    (line.split()[1:] for line in status if line.startswith(b"NSpid:")),
+                    (),
+                )
+            with open("stat", "rb", opener=open_file) as stat:
+                stat_data = stat.read()
+        finally:
+            os.close(fd)
     except _PROCESS_ERRORS:
         return
+
+    # The command name may contain spaces and parentheses. Field 22 follows the
+    # last closing parenthesis at index 19 (Linux man-pages, proc_pid_stat(5), 2026).
+    fields = stat_data.rsplit(b")", 1)[1].split()
+    holder = Process(int(fields[19]))
+    for pid in set(map(int, pids)):
+        yield pid, holder
 
 
 def _bound_sockets(process: Path, namespaces: set[str]) -> Iterator[str]:
@@ -67,13 +95,18 @@ def _held_paths(process: Path) -> Iterator[str]:
 
 
 def observe() -> Processes:
-    pids: set[int] = set()
+    holders: dict[int, list[Process]] = {}
     sockets: set[str] = set()
     paths: set[str] = set()
     namespaces: set[str] = set()
     for process in Path("/proc").iterdir():
         if process.name.isdecimal():
-            pids.update(_namespace_pids(process))
+            for pid, holder in _process_holders(process):
+                holders.setdefault(pid, []).append(holder)
             sockets.update(_bound_sockets(process, namespaces))
             paths.update(_held_paths(process))
-    return Processes(frozenset(pids), frozenset(sockets), frozenset(paths))
+    return Processes(
+        {pid: tuple(processes) for pid, processes in holders.items()},
+        frozenset(sockets),
+        frozenset(paths),
+    )

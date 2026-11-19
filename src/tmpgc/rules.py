@@ -15,6 +15,9 @@ if TYPE_CHECKING:
 
 
 _MINUTE_NS = 60 * 10**9
+_DEBUGGER_PIPE = re.compile(r"clr-debug-pipe-([0-9]+)-([0-9]+)-(?:in|out)")
+_DIAGNOSTIC_SOCKET = re.compile(r"dotnet-diagnostic-([0-9]+)-([0-9]+)-socket")
+_MSBUILD_OWNER = re.compile(r"MSBuild([0-9]+)")
 
 
 class Origin(Enum):
@@ -55,6 +58,12 @@ class Context:
     empty_dir: Callable[[str], bool]
 
 
+@dataclass(frozen=True, slots=True)
+class _Owner:
+    pid: str
+    start_ticks: int | None
+
+
 def classify(entry: Entry, origin: Origin, uid: int) -> Kind | None:
     mode = entry.info.st_mode
     name = entry.name
@@ -71,7 +80,7 @@ def classify(entry: Entry, origin: Origin, uid: int) -> Kind | None:
 
     if stat.S_ISSOCK(mode):
         return Kind.SOCKET
-    if stat.S_ISFIFO(mode) and name.startswith("clr-debug-pipe-"):
+    if stat.S_ISFIFO(mode) and _DEBUGGER_PIPE.fullmatch(name):
         return Kind.DEBUGGER_PIPE
     if stat.S_ISDIR(mode) and name.startswith("MSBuild"):
         return (
@@ -82,10 +91,20 @@ def classify(entry: Entry, origin: Origin, uid: int) -> Kind | None:
     return None
 
 
-def _pid(name: str, prefix: str) -> str | None:
-    if name.startswith(prefix) and (match := re.match(r"[0-9]+", name[len(prefix) :])):
-        return match[0]
+def _owner(name: str) -> _Owner | None:
+    match = _DEBUGGER_PIPE.fullmatch(name) or _DIAGNOSTIC_SOCKET.fullmatch(name)
+    if match is not None:
+        return _Owner(match[1], int(match[2]))
+    if (match := _MSBUILD_OWNER.fullmatch(name)) is not None:
+        return _Owner(match[1], None)
     return None
+
+
+def _owner_live(owner: _Owner, context: Context) -> bool:
+    pid = int(owner.pid)
+    if owner.start_ticks is not None:
+        return context.processes.started_at(pid, owner.start_ticks)
+    return pid in context.processes.holders
 
 
 def _cutoff(context: Context, minutes: int) -> int:
@@ -112,18 +131,17 @@ def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
         case Kind.SOCKET:
             if path in context.processes.bound_sockets:
                 return Decision(kind, Verdict.KEEP, "active socket")
-            pid = _pid(name, "dotnet-diagnostic-") or _pid(name, "MSBuild")
-            if pid is not None and int(pid) in context.processes.live_pids:
+            owner = _owner(name)
+            if owner is not None and _owner_live(owner, context):
                 return Decision(kind, Verdict.KEEP, "active socket")
             return Decision(kind, Verdict.REMOVE, "stale socket")
 
         case Kind.DEBUGGER_PIPE | Kind.MSBUILD_DIRECTORY:
-            prefix = "MSBuild" if kind is Kind.MSBUILD_DIRECTORY else "clr-debug-pipe-"
-            pid = _pid(name, prefix)
-            if pid is not None and int(pid) in context.processes.live_pids:
-                return Decision(kind, Verdict.KEEP, f"pid {pid} alive")
+            owner = _owner(name)
+            if owner is not None and _owner_live(owner, context):
+                return Decision(kind, Verdict.KEEP, f"pid {owner.pid} alive")
             if kind is Kind.MSBUILD_DIRECTORY:
-                if pid is None:
+                if owner is None:
                     return Decision(kind, Verdict.KEEP, "MSBuild dir without PID")
                 return Decision(kind, Verdict.REMOVE, "stale MSBuild dir")
             return Decision(kind, Verdict.REMOVE, "stale clr-debug-pipe")
