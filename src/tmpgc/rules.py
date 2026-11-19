@@ -122,6 +122,16 @@ def _idle(tree: Tree, minutes: int, context: Context) -> bool:
     return tree.last_activity_ns < context.now_ns - minutes * _MINUTE_NS
 
 
+def _idle_unused(
+    kind: Kind, tree: Tree, days: int, label: str, context: Context
+) -> Decision:
+    if not _idle(tree, days * 24 * 60, context):
+        return Decision(kind, Verdict.KEEP, f"{label} touched within {days}d")
+    if tree.in_use:
+        return Decision(kind, Verdict.KEEP, f"{label} held by a live process")
+    return Decision(kind, Verdict.REMOVE, f"{label} idle >{days}d", tree.allocated_kib)
+
+
 def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
     path = entry.path
     normalized = normalize_path(path)
@@ -178,22 +188,21 @@ def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
                 return Decision(kind, Verdict.REMOVE, "empty .NET temp dir")
             return None
 
-        case Kind.SCRATCH | Kind.LARGE:
+        case Kind.SCRATCH:
             tree = context.tree(path)
             if tree is None:
                 return None
-            if kind is Kind.LARGE:
-                if tree.allocated_kib < context.settings.large_entry_mib * 1024:
-                    return None
-                days = context.settings.large_entry_days
-                label = "large entry"
-            else:
-                days = context.settings.scratch_days
-                label = "scratch"
-            if not _idle(tree, days * 24 * 60, context):
-                return Decision(kind, Verdict.KEEP, f"{label} touched within {days}d")
-            if tree.in_use:
-                return Decision(kind, Verdict.KEEP, f"{label} held by a live process")
-            return Decision(
-                kind, Verdict.REMOVE, f"{label} idle >{days}d", tree.allocated_kib
+            return _idle_unused(
+                kind, tree, context.settings.scratch_days, "scratch", context
+            )
+
+        case Kind.LARGE:
+            tree = context.tree(path)
+            if (
+                tree is None
+                or tree.allocated_kib < context.settings.large_entry_mib * 1024
+            ):
+                return None
+            return _idle_unused(
+                kind, tree, context.settings.large_entry_days, "large entry", context
             )
