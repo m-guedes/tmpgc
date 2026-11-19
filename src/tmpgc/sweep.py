@@ -8,7 +8,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import PurePosixPath
 
 from .config import SCAN_ROOT
-from .entries import Entry, expand, parent_directory, walk
+from .entries import Entry, expand, normalize_path, parent_directory, walk
 from .rules import Context, Kind, Origin, Verdict, classify, decide
 
 
@@ -20,18 +20,18 @@ _SECTION = {
     Kind.NUGET_PROBE: 3,
     Kind.EMPTY_SDK_DIRECTORY: 4,
     Kind.SCRATCH: 5,
+    Kind.LARGE: 6,
 }
 _MSBUILD_KINDS = {Kind.MSBUILD_DIRECTORY, Kind.MSBUILD_TEMP_DIRECTORY}
 _SIZE_UNITS = "KMGTPEZYRQ"
 
 
-def _ordered(
-    entries: Iterable[Entry], origin: Origin, uid: int
-) -> list[tuple[Entry, Kind]]:
-    selected: list[tuple[Entry, Kind]] = []
+def _classify_entries(
+    entries: Iterable[Entry], origin: Origin, context: Context
+) -> Iterator[tuple[Entry, Kind]]:
     msbuild_roots: set[PurePosixPath] = set()
     for entry in entries:
-        kind = classify(entry, origin, uid)
+        kind = classify(entry, origin, context)
         if kind is None:
             continue
         if kind in _MSBUILD_KINDS:
@@ -40,18 +40,20 @@ def _ordered(
             if not msbuild_roots.isdisjoint(path.parents):
                 continue
             msbuild_roots.add(path)
-        selected.append((entry, kind))
-    return sorted(
-        selected,
-        key=lambda candidate: (_SECTION[candidate[1]], os.fsencode(candidate[0].path)),
-    )
+        yield entry, kind
 
 
-def _temporary_entries(roots: Iterable[str]) -> Iterator[Entry]:
-    for root in roots:
+def _temporary_entries(roots: Iterable[str], root_paths: set[str]) -> Iterator[Entry]:
+    # Nested roots are scan locations. Use original spellings for physical traversal.
+    seen = root_paths.copy()
+    for root in dict.fromkeys(roots):
         entries = walk(root, 1)
         next(entries, None)
-        yield from entries
+        for entry in entries:
+            path = normalize_path(entry.path)
+            if path not in seen:
+                seen.add(path)
+                yield entry
 
 
 def _scratch_entries(patterns: Iterable[str]) -> Iterator[Entry]:
@@ -65,13 +67,35 @@ def _scratch_entries(patterns: Iterable[str]) -> Iterator[Entry]:
 
 def _candidates(context: Context) -> Iterator[tuple[Entry, Kind]]:
     settings = context.settings
-    uid = context.uid
-    yield from _ordered(walk(SCAN_ROOT, settings.depth), Origin.PRIMARY_SCAN, uid)
-    yield from _ordered(
-        _temporary_entries(settings.temporary_roots), Origin.TEMPORARY_ROOT, uid
+    root_paths = {normalize_path(root) for root in settings.temporary_roots}
+    candidates = [
+        *_classify_entries(
+            walk(SCAN_ROOT, settings.depth), Origin.PRIMARY_SCAN, context
+        ),
+        *_classify_entries(
+            _temporary_entries(settings.temporary_roots, root_paths),
+            Origin.TEMPORARY_ROOT,
+            context,
+        ),
+        *_classify_entries(
+            _scratch_entries(settings.scratch_patterns), Origin.SCRATCH_PATTERN, context
+        ),
+    ]
+    protected = {PurePosixPath(root) for root in root_paths}
+    protected.update(
+        PurePosixPath(normalize_path(entry.path))
+        for entry, kind in candidates
+        if kind is not Kind.LARGE
     )
-    yield from _ordered(
-        _scratch_entries(settings.scratch_patterns), Origin.SCRATCH_PATTERN, uid
+    protected |= {parent for path in protected for parent in path.parents}
+    yield from sorted(
+        (
+            (entry, kind)
+            for entry, kind in candidates
+            if kind is not Kind.LARGE
+            or PurePosixPath(normalize_path(entry.path)) not in protected
+        ),
+        key=lambda candidate: (_SECTION[candidate[1]], os.fsencode(candidate[0].path)),
     )
 
 
@@ -154,7 +178,7 @@ def run(context: Context, *, dry_run: bool, verbose: bool) -> int:
         removed += 1
         freed_kib += kib
 
-    freed = f"{format_size(freed_kib)} from scratch trees"
+    freed = f"{format_size(freed_kib)} from scratch trees and large entries"
     if dry_run:
         print(
             f"Dry run: {removed} items would be removed ({freed}), {skipped} active items kept."

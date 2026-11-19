@@ -1,12 +1,12 @@
 """Exercise each cleanup rule with observed facts supplied by the test."""
 
-import os
 import stat
-import unittest
 from dataclasses import replace
 
+from filesystem_test_case import SyntheticEntryTestCase
+
 from tmpgc.config import Settings
-from tmpgc.entries import Entry, Tree
+from tmpgc.entries import Tree
 from tmpgc.processes import Process, Processes
 from tmpgc.rules import Context, Decision, Kind, Origin, Verdict, classify, decide
 
@@ -17,8 +17,7 @@ _DEFAULT_AGE_SECONDS = 4 * _DAY
 _ALLOCATED_KIB = 4
 
 
-class RuleTests(unittest.TestCase):
-    uid = 1000
+class RuleTests(SyntheticEntryTestCase):
     now_ns = 10 * _DAY * _SECOND_NS
 
     def setUp(self) -> None:
@@ -60,12 +59,9 @@ class RuleTests(unittest.TestCase):
         seconds_ago: int = _DEFAULT_AGE_SECONDS,
     ) -> Decision | None:
         timestamp = self.now_ns - seconds_ago * _SECOND_NS
-        info = os.stat_result(
-            (mode, 0, 0, 1, self.uid, 0, 0, 0, 0, 0), {"st_mtime_ns": timestamp}
-        )
-        entry = Entry(f"/tmp/{name}", info)
+        entry = self.entry(f"/tmp/{name}", mode, mtime_ns=timestamp)
         self.trees.setdefault(entry.path, Tree(_ALLOCATED_KIB, timestamp, in_use=False))
-        kind = classify(entry, origin, self.uid)
+        kind = classify(entry, origin, self.context)
         return None if kind is None else decide(entry, kind, self.context)
 
     def test_removes_unbound_socket(self) -> None:
@@ -237,3 +233,25 @@ class RuleTests(unittest.TestCase):
             ),
             Decision(Kind.SCRATCH, Verdict.KEEP, "scratch touched within 3d"),
         )
+
+    def test_large_entry_needs_size_idleness_and_no_holders(self) -> None:
+        threshold_kib = self.context.settings.large_entry_mib * 1024
+        recent = self.now_ns - _DAY * _SECOND_NS + 1
+        for tree, verdict, expected_size in (
+            (Tree(threshold_kib, 0, in_use=False), Verdict.REMOVE, threshold_kib),
+            (Tree(threshold_kib, recent, in_use=False), Verdict.KEEP, None),
+            (Tree(threshold_kib, 0, in_use=True), Verdict.KEEP, None),
+            (Tree(threshold_kib - 1, 0, in_use=False), None, None),
+        ):
+            with self.subTest(tree=tree):
+                self.trees["/tmp/large"] = tree
+                decision = self._decision(
+                    "large", stat.S_IFDIR, origin=Origin.TEMPORARY_ROOT
+                )
+                if verdict is None:
+                    self.assertIsNone(decision)
+                else:
+                    assert decision is not None
+                    self.assertIs(decision.kind, Kind.LARGE)
+                    self.assertIs(decision.verdict, verdict)
+                    self.assertEqual(decision.allocated_kib, expected_size)

@@ -4,7 +4,7 @@ import mmap
 import subprocess
 import sys
 
-from tree_test_case import TreeTestCase
+from filesystem_test_case import TreeTestCase
 
 from tmpgc.entries import measure
 from tmpgc.processes import observe

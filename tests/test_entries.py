@@ -3,7 +3,7 @@
 import os
 import time
 
-from tree_test_case import TreeTestCase
+from filesystem_test_case import TreeTestCase
 
 from tmpgc.entries import expand, measure
 

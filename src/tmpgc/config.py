@@ -20,6 +20,8 @@ class Settings:
     scratch_days: int = DEFAULT_SCRATCH_DAYS
     build_litter_minutes: int = 60
     empty_directory_minutes: int = 24 * 60
+    large_entry_mib: int = 100
+    large_entry_days: int = 1
 
 
 class ConfigError(ValueError):

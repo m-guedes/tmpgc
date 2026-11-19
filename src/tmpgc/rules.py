@@ -36,6 +36,7 @@ class Kind(Enum):
     NUGET_PROBE = auto()
     EMPTY_SDK_DIRECTORY = auto()
     SCRATCH = auto()
+    LARGE = auto()
 
 
 class Verdict(Enum):
@@ -68,19 +69,23 @@ class _Owner:
     start_ticks: int | None
 
 
-def classify(entry: Entry, origin: Origin, uid: int) -> Kind | None:
+def classify(entry: Entry, origin: Origin, context: Context) -> Kind | None:
     mode = entry.info.st_mode
     name = entry.name
     if origin is Origin.SCRATCH_PATTERN:
-        return Kind.SCRATCH if entry.info.st_uid == uid else None
+        return Kind.SCRATCH if entry.info.st_uid == context.uid else None
     if origin is Origin.TEMPORARY_ROOT:
-        if entry.info.st_uid != uid:
+        if entry.info.st_uid != context.uid:
             return None
         if stat.S_ISREG(mode) and name.startswith("CASESENSITIVETEST"):
             return Kind.NUGET_PROBE
-        if stat.S_ISDIR(mode) and re.fullmatch(r"[A-Za-z0-9]{6}", name):
+        if (
+            stat.S_ISDIR(mode)
+            and re.fullmatch(r"[A-Za-z0-9]{6}", name)
+            and context.empty_dir(entry.path)
+        ):
             return Kind.EMPTY_SDK_DIRECTORY
-        return None
+        return Kind.LARGE
 
     if stat.S_ISSOCK(mode):
         return Kind.SOCKET
@@ -166,8 +171,6 @@ def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
             return None
 
         case Kind.EMPTY_SDK_DIRECTORY:
-            if not context.empty_dir(path):
-                return None
             tree = context.tree(path)
             if tree is not None and _idle(
                 tree, context.settings.empty_directory_minutes, context
@@ -175,15 +178,22 @@ def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
                 return Decision(kind, Verdict.REMOVE, "empty .NET temp dir")
             return None
 
-        case Kind.SCRATCH:
+        case Kind.SCRATCH | Kind.LARGE:
             tree = context.tree(path)
             if tree is None:
                 return None
-            days = context.settings.scratch_days
+            if kind is Kind.LARGE:
+                if tree.allocated_kib < context.settings.large_entry_mib * 1024:
+                    return None
+                days = context.settings.large_entry_days
+                label = "large entry"
+            else:
+                days = context.settings.scratch_days
+                label = "scratch"
             if not _idle(tree, days * 24 * 60, context):
-                return Decision(kind, Verdict.KEEP, f"scratch touched within {days}d")
+                return Decision(kind, Verdict.KEEP, f"{label} touched within {days}d")
             if tree.in_use:
-                return Decision(kind, Verdict.KEEP, "scratch held by a live process")
+                return Decision(kind, Verdict.KEEP, f"{label} held by a live process")
             return Decision(
-                kind, Verdict.REMOVE, f"scratch idle >{days}d", tree.allocated_kib
+                kind, Verdict.REMOVE, f"{label} idle >{days}d", tree.allocated_kib
             )
