@@ -1,6 +1,5 @@
 """Scan physical filesystem entries and measure their attributes."""
 
-import errno
 import os
 import stat
 from collections.abc import Generator, Iterator
@@ -21,6 +20,12 @@ class Entry:
     @property
     def name(self) -> str:
         return os.path.basename(self.path.rstrip("/"))
+
+
+@dataclass(frozen=True, slots=True)
+class Tree:
+    allocated_kib: int
+    last_activity_ns: int
 
 
 @contextmanager
@@ -109,24 +114,7 @@ def _matches(directory: str, component: str) -> Iterator[Entry]:
             yield entry
 
 
-def _owned_match(entry: Entry, uid: int) -> bool:
-    if entry.info.st_uid != uid:
-        return False
-    if not stat.S_ISLNK(entry.info.st_mode):
-        return True
-    # Bash -O tests the target of a link. Age, allocation and removal use the link itself.
-    try:
-        with parent_directory(entry.path) as (fd, name):
-            return os.stat(name, dir_fd=fd).st_uid == uid
-    except _SCAN_ERRORS:
-        return False
-    except OSError as error:
-        if error.errno == errno.ELOOP:
-            return False
-        raise
-
-
-def expand(pattern: str, uid: int) -> Iterator[Entry]:
+def expand(pattern: str) -> Iterator[Entry]:
     entries = list(walk("/", 0))
     for component in pattern.split("/"):
         if component:
@@ -139,15 +127,7 @@ def expand(pattern: str, uid: int) -> Iterator[Entry]:
     for entry in entries:
         if pattern.endswith("/") and not stat.S_ISDIR(entry.info.st_mode):
             continue
-        if _owned_match(entry, uid):
-            yield entry
-
-
-def newest_change(path: str) -> int | None:
-    return max(
-        (max(entry.info.st_mtime_ns, entry.info.st_ctime_ns) for entry in walk(path)),
-        default=None,
-    )
+        yield entry
 
 
 def empty_dir(path: str) -> bool:
@@ -162,16 +142,29 @@ def empty_dir(path: str) -> bool:
         return False
 
 
-def allocated_kib(path: str) -> int:
+def measure(path: str) -> Tree | None:
     blocks = 0
+    last_activity_ns: int | None = None
     linked: set[tuple[int, int]] = set()
     for entry in walk(path):
         info = entry.info
-        if info.st_nlink > 1 and not stat.S_ISDIR(info.st_mode):
+        directory = stat.S_ISDIR(info.st_mode)
+        activity_ns = max(info.st_mtime_ns, info.st_ctime_ns)
+        # Directory listings advance atime, including listings by this scan.
+        if not directory:
+            activity_ns = max(activity_ns, info.st_atime_ns)
+        last_activity_ns = (
+            activity_ns
+            if last_activity_ns is None
+            else max(last_activity_ns, activity_ns)
+        )
+        if info.st_nlink > 1 and not directory:
             identity = (info.st_dev, info.st_ino)
             if identity in linked:
                 continue
             linked.add(identity)
         blocks += info.st_blocks
+    if last_activity_ns is None:
+        return None
     # Linux st_blocks counts 512-byte blocks. du -sk rounds the tree's sum to KiB.
-    return (blocks + 1) // 2
+    return Tree((blocks + 1) // 2, last_activity_ns)

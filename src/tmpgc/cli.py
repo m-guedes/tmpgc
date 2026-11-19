@@ -71,7 +71,7 @@ def main() -> int:
         now_ns=time.time_ns(),
         uid=uid,
         processes=processes.observe(),
-        newest_change=entries.newest_change,
+        tree=entries.measure,
         empty_dir=entries.empty_dir,
     )
     return sweep.run(context, dry_run=options.dry_run, verbose=options.verbose)

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .config import Settings
-    from .entries import Entry
+    from .entries import Entry, Tree
     from .processes import Processes
 
 
@@ -46,6 +46,7 @@ class Decision:
     kind: Kind
     verdict: Verdict
     reason: str
+    allocated_kib: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +55,7 @@ class Context:
     processes: Processes
     now_ns: int
     uid: int
-    newest_change: Callable[[str], int | None]
+    tree: Callable[[str], Tree | None]
     empty_dir: Callable[[str], bool]
 
 
@@ -109,14 +110,8 @@ def _owner_live(owner: _Owner, entry: Entry, context: Context) -> bool:
     )
 
 
-def _cutoff(context: Context, minutes: int) -> int:
-    # GNU findutils 4.10.0's -mmin -N and +N compare against N minutes ago.
-    return context.now_ns - minutes * _MINUTE_NS
-
-
-def _recent(path: str, minutes: int, context: Context) -> bool:
-    newest = context.newest_change(path)
-    return newest is not None and newest > _cutoff(context, minutes)
+def _idle(tree: Tree, minutes: int, context: Context) -> bool:
+    return tree.last_activity_ns < context.now_ns - minutes * _MINUTE_NS
 
 
 def _held(path: str, context: Context) -> bool:
@@ -149,31 +144,42 @@ def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
             return Decision(kind, Verdict.REMOVE, "stale clr-debug-pipe")
 
         case Kind.MSBUILD_TEMP_DIRECTORY:
-            if _recent(path, build_minutes, context):
+            tree = context.tree(path)
+            if tree is None:
+                return None
+            if not _idle(tree, build_minutes, context):
                 return Decision(
                     kind, Verdict.KEEP, f"MSBuildTemp active within {build_minutes}m"
                 )
             return Decision(kind, Verdict.REMOVE, f"MSBuildTemp idle >{build_minutes}m")
 
         case Kind.NUGET_PROBE:
-            if entry.info.st_size == 0 and entry.info.st_mtime_ns < _cutoff(
-                context, build_minutes
-            ):
+            if entry.info.st_size != 0:
+                return None
+            tree = context.tree(path)
+            if tree is not None and _idle(tree, build_minutes, context):
                 return Decision(kind, Verdict.REMOVE, "NuGet probe file")
             return None
 
         case Kind.EMPTY_SDK_DIRECTORY:
-            minutes = context.settings.empty_directory_minutes
-            if entry.info.st_mtime_ns < _cutoff(context, minutes) and context.empty_dir(
-                path
+            if not context.empty_dir(path):
+                return None
+            tree = context.tree(path)
+            if tree is not None and _idle(
+                tree, context.settings.empty_directory_minutes, context
             ):
                 return Decision(kind, Verdict.REMOVE, "empty .NET temp dir")
             return None
 
         case Kind.SCRATCH:
+            tree = context.tree(path)
+            if tree is None:
+                return None
             days = context.settings.scratch_days
-            if _recent(path, days * 24 * 60, context):
+            if not _idle(tree, days * 24 * 60, context):
                 return Decision(kind, Verdict.KEEP, f"scratch touched within {days}d")
             if _held(path, context):
                 return Decision(kind, Verdict.KEEP, "scratch held by a live process")
-            return Decision(kind, Verdict.REMOVE, f"scratch idle >{days}d")
+            return Decision(
+                kind, Verdict.REMOVE, f"scratch idle >{days}d", tree.allocated_kib
+            )

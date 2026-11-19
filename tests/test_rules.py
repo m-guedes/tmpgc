@@ -6,7 +6,7 @@ import unittest
 from dataclasses import replace
 
 from tmpgc.config import Settings
-from tmpgc.entries import Entry
+from tmpgc.entries import Entry, Tree
 from tmpgc.processes import Process, Processes
 from tmpgc.rules import Context, Decision, Kind, Origin, Verdict, classify, decide
 
@@ -14,6 +14,7 @@ from tmpgc.rules import Context, Decision, Kind, Origin, Verdict, classify, deci
 _SECOND_NS = 10**9
 _DAY = 24 * 60 * 60
 _DEFAULT_AGE_SECONDS = 4 * _DAY
+_ALLOCATED_KIB = 4
 
 
 class RuleTests(unittest.TestCase):
@@ -21,6 +22,10 @@ class RuleTests(unittest.TestCase):
     now_ns = 10 * _DAY * _SECOND_NS
 
     def setUp(self) -> None:
+        self.trees = {
+            f"/tmp/{name}": Tree(_ALLOCATED_KIB, self.now_ns)
+            for name in ("MSBuildTempRecent", "scratch-recent")
+        }
         self.context = Context(
             settings=Settings(("/tmp",), ()),
             processes=Processes(
@@ -37,7 +42,7 @@ class RuleTests(unittest.TestCase):
             ),
             now_ns=self.now_ns,
             uid=self.uid,
-            newest_change=self._newest_change,
+            tree=self.trees.get,
             empty_dir=self._empty_dir,
         )
 
@@ -45,13 +50,6 @@ class RuleTests(unittest.TestCase):
         self.context = replace(
             self.context,
             processes=replace(self.context.processes, holders={42: holders}),
-        )
-
-    def _newest_change(self, path: str) -> int:
-        return (
-            self.now_ns
-            if path in {"/tmp/MSBuildTempRecent", "/tmp/scratch-recent"}
-            else 0
         )
 
     def _empty_dir(self, path: str) -> bool:
@@ -70,6 +68,7 @@ class RuleTests(unittest.TestCase):
             (mode, 0, 0, 1, self.uid, 0, 0, 0, 0, 0), {"st_mtime_ns": timestamp}
         )
         entry = Entry(f"/tmp/{name}", info)
+        self.trees.setdefault(entry.path, Tree(_ALLOCATED_KIB, timestamp))
         kind = classify(entry, origin, self.uid)
         return None if kind is None else decide(entry, kind, self.context)
 
@@ -208,7 +207,7 @@ class RuleTests(unittest.TestCase):
     def test_removes_idle_scratch_when_its_path_is_only_a_substring(self) -> None:
         self.assertEqual(
             self._decision("scratch-idle", stat.S_IFDIR, origin=Origin.SCRATCH_PATTERN),
-            Decision(Kind.SCRATCH, Verdict.REMOVE, "scratch idle >3d"),
+            Decision(Kind.SCRATCH, Verdict.REMOVE, "scratch idle >3d", _ALLOCATED_KIB),
         )
 
     def test_keeps_idle_scratch_with_held_descendant(self) -> None:

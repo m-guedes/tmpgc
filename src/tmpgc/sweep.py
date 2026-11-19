@@ -8,7 +8,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import PurePosixPath
 
 from .config import SCAN_ROOT
-from .entries import Entry, allocated_kib, expand, parent_directory, walk
+from .entries import Entry, expand, parent_directory, walk
 from .rules import Context, Kind, Origin, Verdict, classify, decide
 
 
@@ -54,10 +54,10 @@ def _temporary_entries(roots: Iterable[str]) -> Iterator[Entry]:
         yield from entries
 
 
-def _scratch_entries(patterns: Iterable[str], uid: int) -> Iterator[Entry]:
+def _scratch_entries(patterns: Iterable[str]) -> Iterator[Entry]:
     seen: set[str] = set()
     for pattern in patterns:
-        for entry in expand(pattern, uid):
+        for entry in expand(pattern):
             if entry.path not in seen:
                 seen.add(entry.path)
                 yield entry
@@ -71,7 +71,7 @@ def _candidates(context: Context) -> Iterator[tuple[Entry, Kind]]:
         _temporary_entries(settings.temporary_roots), Origin.TEMPORARY_ROOT, uid
     )
     yield from _ordered(
-        _scratch_entries(settings.scratch_patterns, uid), Origin.SCRATCH_PATTERN, uid
+        _scratch_entries(settings.scratch_patterns), Origin.SCRATCH_PATTERN, uid
     )
 
 
@@ -139,8 +139,8 @@ def run(context: Context, *, dry_run: bool, verbose: bool) -> int:
             continue
 
         kib = 0
-        if decision.kind is Kind.SCRATCH:
-            kib = allocated_kib(path)
+        if decision.allocated_kib is not None:
+            kib = decision.allocated_kib
             reason = f"{reason}, {format_size(kib)}"
         if dry_run:
             print(f"WOULD REMOVE ({reason}): {path}")
