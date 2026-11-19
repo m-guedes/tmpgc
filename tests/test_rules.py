@@ -39,6 +39,7 @@ class RuleTests(unittest.TestCase):
             uid=self.uid,
             tree=self.trees.get,
             empty_dir=self._empty_dir,
+            mount_points=frozenset(),
         )
 
     def _set_holders(self, *holders: Process) -> None:
@@ -210,6 +211,23 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(
             self._decision("scratch-held", stat.S_IFDIR, origin=Origin.SCRATCH_PATTERN),
             Decision(Kind.SCRATCH, Verdict.KEEP, "scratch held by a live process"),
+        )
+
+    def test_keeps_mount_point_and_its_ancestor(self) -> None:
+        self.context = replace(
+            self.context, mount_points=frozenset({"/tmp/scratch-mounted/nested"})
+        )
+        for name in ("scratch-mounted", "scratch-mounted/nested"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self._decision(name, stat.S_IFDIR, origin=Origin.SCRATCH_PATTERN),
+                    Decision(Kind.SCRATCH, Verdict.KEEP, "at or above a mount point"),
+                )
+        self.assertEqual(
+            self._decision(
+                "scratch-mount", stat.S_IFDIR, origin=Origin.SCRATCH_PATTERN
+            ),
+            Decision(Kind.SCRATCH, Verdict.REMOVE, "scratch idle >3d", _ALLOCATED_KIB),
         )
 
     def test_keeps_recent_scratch(self) -> None:

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
+from .entries import normalize_path
+
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -57,6 +59,7 @@ class Context:
     uid: int
     tree: Callable[[str], Tree | None]
     empty_dir: Callable[[str], bool]
+    mount_points: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +119,13 @@ def _idle(tree: Tree, minutes: int, context: Context) -> bool:
 
 def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
     path = entry.path
+    normalized = normalize_path(path)
+    prefix = normalized.rstrip("/") + "/"
+    if normalized in context.mount_points or any(
+        mount.startswith(prefix) for mount in context.mount_points
+    ):
+        return Decision(kind, Verdict.KEEP, "at or above a mount point")
+
     name = entry.name
     build_minutes = context.settings.build_litter_minutes
     match kind:

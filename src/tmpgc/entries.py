@@ -1,6 +1,7 @@
 """Scan physical filesystem entries and measure their attributes."""
 
 import os
+import re
 import stat
 from collections.abc import Generator, Iterator
 from collections.abc import Set as AbstractSet
@@ -11,6 +12,7 @@ from fnmatch import fnmatchcase
 
 _SCAN_ERRORS = (FileNotFoundError, NotADirectoryError, PermissionError)
 _DIRECTORY_FLAGS = os.O_DIRECTORY | os.O_NOFOLLOW
+_MOUNT_ESCAPE = re.compile(rb"\\([0-7]{3})")
 
 
 type FileId = tuple[int, int]
@@ -35,6 +37,11 @@ class Tree:
 
 def file_id(info: os.stat_result) -> FileId:
     return info.st_dev, info.st_ino
+
+
+def normalize_path(path: str) -> str:
+    # Linux resolves multiple leading slashes as one.
+    return os.path.normpath("/" + path.lstrip("/"))
 
 
 @contextmanager
@@ -149,6 +156,19 @@ def empty_dir(path: str) -> bool:
             return next(scan, None) is None
     except _SCAN_ERRORS:
         return False
+
+
+def mount_points() -> frozenset[str]:
+    points: set[str] = set()
+    with open("/proc/self/mountinfo", "rb") as mounts:
+        for record in mounts:
+            # Field 5 is the mount path (Linux man-pages, proc_pid_mountinfo(5), 2026).
+            target = record.split(b" ", 5)[4]
+            decoded = _MOUNT_ESCAPE.sub(
+                lambda escape: int(escape[1], 8).to_bytes(1), target
+            )
+            points.add(os.fsdecode(decoded))
+    return frozenset(points)
 
 
 def measure(path: str, held: AbstractSet[FileId]) -> Tree | None:

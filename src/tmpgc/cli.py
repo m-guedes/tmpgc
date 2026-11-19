@@ -75,5 +75,6 @@ def main() -> int:
         processes=observed,
         tree=lambda path: entries.measure(path, observed.held),
         empty_dir=entries.empty_dir,
+        mount_points=entries.mount_points(),
     )
     return sweep.run(context, dry_run=options.dry_run, verbose=options.verbose)
