@@ -13,6 +13,7 @@ from tmpgc.rules import Context, Decision, Kind, Origin, Verdict, classify, deci
 
 _SECOND_NS = 10**9
 _DAY = 24 * 60 * 60
+_DEFAULT_AGE_SECONDS = 4 * _DAY
 
 
 class RuleTests(unittest.TestCase):
@@ -23,7 +24,7 @@ class RuleTests(unittest.TestCase):
         self.context = Context(
             settings=Settings(("/tmp",), ()),
             processes=Processes(
-                {42: (Process(100),)},
+                {42: (Process(100, self.uid),)},
                 frozenset({"/tmp/bound.sock"}),
                 frozenset(
                     {
@@ -31,11 +32,19 @@ class RuleTests(unittest.TestCase):
                         "/tmp/unrelated/tmp/scratch-idle/open",
                     }
                 ),
+                boot_ns=self.now_ns - (_DEFAULT_AGE_SECONDS + 1) * _SECOND_NS,
+                ticks_per_second=100,
             ),
             now_ns=self.now_ns,
             uid=self.uid,
             newest_change=self._newest_change,
             empty_dir=self._empty_dir,
+        )
+
+    def _set_holders(self, *holders: Process) -> None:
+        self.context = replace(
+            self.context,
+            processes=replace(self.context.processes, holders={42: holders}),
         )
 
     def _newest_change(self, path: str) -> int:
@@ -54,7 +63,7 @@ class RuleTests(unittest.TestCase):
         mode: int,
         *,
         origin: Origin = Origin.PRIMARY_SCAN,
-        seconds_ago: int = 4 * _DAY,
+        seconds_ago: int = _DEFAULT_AGE_SECONDS,
     ) -> Decision | None:
         timestamp = self.now_ns - seconds_ago * _SECOND_NS
         info = os.stat_result(
@@ -101,15 +110,31 @@ class RuleTests(unittest.TestCase):
         )
 
     def test_keeps_debugger_pipe_when_one_pid_holder_matches(self) -> None:
-        self.context = replace(
-            self.context,
-            processes=replace(
-                self.context.processes, holders={42: (Process(1), Process(100))}
-            ),
-        )
+        self._set_holders(Process(1, self.uid), Process(100, self.uid))
         self.assertEqual(
             self._decision("clr-debug-pipe-42-100-in", stat.S_IFIFO),
             Decision(Kind.DEBUGGER_PIPE, Verdict.KEEP, "pid 42 alive"),
+        )
+
+    def test_removes_unbound_msbuild_socket_when_only_root_holds_its_pid(self) -> None:
+        self._set_holders(Process(100, 0))
+        self.assertEqual(
+            self._decision("MSBuild42", stat.S_IFSOCK),
+            Decision(Kind.SOCKET, Verdict.REMOVE, "stale socket"),
+        )
+
+    def test_removes_unbound_msbuild_socket_when_holder_started_later(self) -> None:
+        self._set_holders(Process(101, self.uid))
+        self.assertEqual(
+            self._decision("MSBuild42", stat.S_IFSOCK),
+            Decision(Kind.SOCKET, Verdict.REMOVE, "stale socket"),
+        )
+
+    def test_keeps_unbound_msbuild_socket_when_one_holder_started_at_bind(self) -> None:
+        self._set_holders(Process(1, 0), Process(100, self.uid))
+        self.assertEqual(
+            self._decision("MSBuild42", stat.S_IFSOCK),
+            Decision(Kind.SOCKET, Verdict.KEEP, "active socket"),
         )
 
     def test_removes_msbuild_directory_for_exited_pid(self) -> None:

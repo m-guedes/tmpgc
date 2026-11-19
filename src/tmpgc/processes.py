@@ -9,11 +9,13 @@ from .config import SCAN_ROOT
 
 
 _PROCESS_ERRORS = (FileNotFoundError, PermissionError, ProcessLookupError)
+_SECOND_NS = 10**9
 
 
 @dataclass(frozen=True, slots=True)
 class Process:
     start_ticks: int
+    uid: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,11 +23,22 @@ class Processes:
     holders: Mapping[int, tuple[Process, ...]]
     bound_sockets: frozenset[str]
     held_paths: frozenset[str]
+    boot_ns: int
+    ticks_per_second: int
 
     def started_at(self, pid: int, start_ticks: int) -> bool:
         return any(
             holder.start_ticks == start_ticks for holder in self.holders.get(pid, ())
         )
+
+    def started_no_later_than(self, pid: int, uid: int, instant_ns: int) -> bool:
+        return any(
+            holder.uid == uid and self._start_ns(holder.start_ticks) <= instant_ns
+            for holder in self.holders.get(pid, ())
+        )
+
+    def _start_ns(self, start_ticks: int) -> int:
+        return self.boot_ns + start_ticks * _SECOND_NS // self.ticks_per_second
 
 
 def _process_holders(process: Path) -> Iterator[tuple[int, Process]]:
@@ -38,10 +51,11 @@ def _process_holders(process: Path) -> Iterator[tuple[int, Process]]:
         fd = os.open(process, os.O_PATH | os.O_DIRECTORY)
         try:
             with open("status", "rb", opener=open_file) as status:
-                pids = next(
-                    (line.split()[1:] for line in status if line.startswith(b"NSpid:")),
-                    (),
-                )
+                ids: dict[bytes, list[bytes]] = {}
+                for line in status:
+                    if line.startswith((b"Uid:", b"NSpid:")):
+                        field, *values = line.split()
+                        ids[field] = values
             with open("stat", "rb", opener=open_file) as stat:
                 stat_data = stat.read()
         finally:
@@ -52,8 +66,9 @@ def _process_holders(process: Path) -> Iterator[tuple[int, Process]]:
     # The command name may contain spaces and parentheses. Field 22 follows the
     # last closing parenthesis at index 19 (Linux man-pages, proc_pid_stat(5), 2026).
     fields = stat_data.rsplit(b")", 1)[1].split()
-    holder = Process(int(fields[19]))
-    for pid in set(map(int, pids)):
+    # The real UID comes first (Linux man-pages, proc_pid_status(5), 2026).
+    holder = Process(int(fields[19]), int(ids[b"Uid:"][0]))
+    for pid in set(map(int, ids.get(b"NSpid:", ()))):
         yield pid, holder
 
 
@@ -94,6 +109,15 @@ def _held_paths(process: Path) -> Iterator[str]:
         return
 
 
+def _boot_ns() -> int:
+    # btime is seconds since the Epoch (Linux man-pages, proc_stat(5), 2026).
+    with Path("/proc/stat").open("rb") as stat:
+        for line in stat:
+            if line.startswith(b"btime "):
+                return int(line.split()[1]) * _SECOND_NS
+    raise ValueError("/proc/stat is missing btime")
+
+
 def observe() -> Processes:
     holders: dict[int, list[Process]] = {}
     sockets: set[str] = set()
@@ -109,4 +133,6 @@ def observe() -> Processes:
         {pid: tuple(processes) for pid, processes in holders.items()},
         frozenset(sockets),
         frozenset(paths),
+        boot_ns=_boot_ns(),
+        ticks_per_second=os.sysconf("SC_CLK_TCK"),
     )

@@ -100,11 +100,13 @@ def _owner(name: str) -> _Owner | None:
     return None
 
 
-def _owner_live(owner: _Owner, context: Context) -> bool:
+def _owner_live(owner: _Owner, entry: Entry, context: Context) -> bool:
     pid = int(owner.pid)
     if owner.start_ticks is not None:
         return context.processes.started_at(pid, owner.start_ticks)
-    return pid in context.processes.holders
+    return context.processes.started_no_later_than(
+        pid, context.uid, entry.info.st_mtime_ns
+    )
 
 
 def _cutoff(context: Context, minutes: int) -> int:
@@ -132,13 +134,13 @@ def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
             if path in context.processes.bound_sockets:
                 return Decision(kind, Verdict.KEEP, "active socket")
             owner = _owner(name)
-            if owner is not None and _owner_live(owner, context):
+            if owner is not None and _owner_live(owner, entry, context):
                 return Decision(kind, Verdict.KEEP, "active socket")
             return Decision(kind, Verdict.REMOVE, "stale socket")
 
         case Kind.DEBUGGER_PIPE | Kind.MSBUILD_DIRECTORY:
             owner = _owner(name)
-            if owner is not None and _owner_live(owner, context):
+            if owner is not None and _owner_live(owner, entry, context):
                 return Decision(kind, Verdict.KEEP, f"pid {owner.pid} alive")
             if kind is Kind.MSBUILD_DIRECTORY:
                 if owner is None:
