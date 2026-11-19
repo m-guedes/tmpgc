@@ -40,6 +40,10 @@ lint:
     cp -- {{ quote(units / "ccleanup.timer") }} "$verify_dir/"
     systemd-analyze --user verify "$verify_dir/ccleanup.service" "$verify_dir/ccleanup.timer"
 
+# Run the cleanup rule tests.
+test:
+    uv run python -m unittest discover -s tests
+
 # Link the script and the units from this checkout and start the hourly timer.
 install:
     #!/usr/bin/env bash
