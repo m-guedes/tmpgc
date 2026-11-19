@@ -1,5 +1,5 @@
 [Unit]
-Description=Run ccleanup hourly
+Description=Run tmpgc hourly
 
 [Timer]
 OnCalendar=hourly
