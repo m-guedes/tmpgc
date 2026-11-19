@@ -23,6 +23,7 @@ class CandidateTests(SyntheticEntryTestCase):
         sdk_named_root = "/tmp/CfgDir"
         scratch = self.entry("/tmp/scratch-holder/scratch")
         socket = self.entry("/tmp/socket-holder/open.sock", stat.S_IFSOCK)
+        segment = self.entry("/dev/shm/pool", stat.S_IFREG)
         plain = "/tmp/root-holder-extra"
         top_level = (
             "/tmp/scratch-holder",
@@ -34,7 +35,14 @@ class CandidateTests(SyntheticEntryTestCase):
         )
         context = Context(
             settings=Settings(
-                ("/tmp", alias, root, sdk_named_root, "/tmp/root-holder/nested"),
+                (
+                    "/tmp",
+                    alias,
+                    root,
+                    sdk_named_root,
+                    "/tmp/root-holder/nested",
+                    "/dev/shm",
+                ),
                 ("/tmp/scratch-holder/*",),
             ),
             processes=Processes({}, frozenset(), frozenset(), 0, 100),
@@ -53,6 +61,8 @@ class CandidateTests(SyntheticEntryTestCase):
                     yield socket
             elif path in {root, alias}:
                 yield self.entry(f"{path.rstrip('/')}/child")
+            elif path == "/dev/shm":
+                yield segment
 
         with (
             patch("tmpgc.sweep.walk", side_effect=scan),
@@ -70,6 +80,7 @@ class CandidateTests(SyntheticEntryTestCase):
                 (scratch.path, Kind.SCRATCH),
                 (f"{root}/child", Kind.LARGE),
                 (plain, Kind.LARGE),
+                (segment.path, Kind.SEGMENT),
             ],
         )
 

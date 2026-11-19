@@ -26,6 +26,7 @@ class Origin(Enum):
     PRIMARY_SCAN = auto()
     TEMPORARY_ROOT = auto()
     SCRATCH_PATTERN = auto()
+    SHARED_MEMORY = auto()
 
 
 class Kind(Enum):
@@ -37,6 +38,7 @@ class Kind(Enum):
     EMPTY_SDK_DIRECTORY = auto()
     SCRATCH = auto()
     LARGE = auto()
+    SEGMENT = auto()
 
 
 class Verdict(Enum):
@@ -74,6 +76,12 @@ def classify(entry: Entry, origin: Origin, context: Context) -> Kind | None:
     name = entry.name
     if origin is Origin.SCRATCH_PATTERN:
         return Kind.SCRATCH if entry.info.st_uid == context.uid else None
+    if origin is Origin.SHARED_MEMORY:
+        return (
+            Kind.SEGMENT
+            if stat.S_ISREG(mode) and entry.info.st_uid == context.uid
+            else None
+        )
     if origin is Origin.TEMPORARY_ROOT:
         if entry.info.st_uid != context.uid:
             return None
@@ -205,4 +213,12 @@ def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
                 return None
             return _idle_unused(
                 kind, tree, context.settings.large_entry_days, "large entry", context
+            )
+
+        case Kind.SEGMENT:
+            tree = context.tree(path)
+            if tree is None:
+                return None
+            return _idle_unused(
+                kind, tree, context.settings.segment_days, "segment", context
             )

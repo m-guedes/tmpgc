@@ -1,5 +1,5 @@
 [Unit]
-Description=Remove stale build and agent litter from /tmp
+Description=Remove stale entries from /tmp and /dev/shm
 
 [Service]
 Type=oneshot

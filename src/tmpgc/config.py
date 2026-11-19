@@ -8,6 +8,7 @@ from typing import cast
 
 
 SCAN_ROOT = "/tmp"
+SHARED_MEMORY_ROOT = "/dev/shm"
 DEFAULT_DEPTH = 2
 DEFAULT_SCRATCH_DAYS = 3
 
@@ -22,6 +23,7 @@ class Settings:
     empty_directory_minutes: int = 24 * 60
     large_entry_mib: int = 100
     large_entry_days: int = 1
+    segment_days: int = 1
 
 
 class ConfigError(ValueError):

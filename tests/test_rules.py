@@ -56,13 +56,42 @@ class RuleTests(SyntheticEntryTestCase):
         mode: int,
         *,
         origin: Origin = Origin.PRIMARY_SCAN,
+        root: str = "/tmp",
         seconds_ago: int = _DEFAULT_AGE_SECONDS,
     ) -> Decision | None:
         timestamp = self.now_ns - seconds_ago * _SECOND_NS
-        entry = self.entry(f"/tmp/{name}", mode, mtime_ns=timestamp)
+        entry = self.entry(f"{root}/{name}", mode, mtime_ns=timestamp)
         self.trees.setdefault(entry.path, Tree(_ALLOCATED_KIB, timestamp, in_use=False))
         kind = classify(entry, origin, self.context)
         return None if kind is None else decide(entry, kind, self.context)
+
+    def _assert_one_day_idle_unused(
+        self,
+        kind: Kind,
+        mode: int,
+        origin: Origin,
+        allocated_kib: int,
+        *,
+        root: str = "/tmp",
+    ) -> None:
+        cutoff = self.now_ns - _DAY * _SECOND_NS
+        for last_activity_ns, in_use, verdict in (
+            (cutoff - 1, False, Verdict.REMOVE),
+            (cutoff + 1, False, Verdict.KEEP),
+            (cutoff - 1, True, Verdict.KEEP),
+        ):
+            with self.subTest(last_activity_ns=last_activity_ns, in_use=in_use):
+                self.trees[f"{root}/entry"] = Tree(
+                    allocated_kib, last_activity_ns, in_use=in_use
+                )
+                decision = self._decision("entry", mode, origin=origin, root=root)
+                assert decision is not None
+                self.assertIs(decision.kind, kind)
+                self.assertIs(decision.verdict, verdict)
+                self.assertEqual(
+                    decision.allocated_kib,
+                    allocated_kib if verdict is Verdict.REMOVE else None,
+                )
 
     def test_removes_unbound_socket(self) -> None:
         self.assertEqual(
@@ -236,22 +265,19 @@ class RuleTests(SyntheticEntryTestCase):
 
     def test_large_entry_needs_size_idleness_and_no_holders(self) -> None:
         threshold_kib = self.context.settings.large_entry_mib * 1024
-        recent = self.now_ns - _DAY * _SECOND_NS + 1
-        for tree, verdict, expected_size in (
-            (Tree(threshold_kib, 0, in_use=False), Verdict.REMOVE, threshold_kib),
-            (Tree(threshold_kib, recent, in_use=False), Verdict.KEEP, None),
-            (Tree(threshold_kib, 0, in_use=True), Verdict.KEEP, None),
-            (Tree(threshold_kib - 1, 0, in_use=False), None, None),
-        ):
-            with self.subTest(tree=tree):
-                self.trees["/tmp/large"] = tree
-                decision = self._decision(
-                    "large", stat.S_IFDIR, origin=Origin.TEMPORARY_ROOT
-                )
-                if verdict is None:
-                    self.assertIsNone(decision)
-                else:
-                    assert decision is not None
-                    self.assertIs(decision.kind, Kind.LARGE)
-                    self.assertIs(decision.verdict, verdict)
-                    self.assertEqual(decision.allocated_kib, expected_size)
+        self._assert_one_day_idle_unused(
+            Kind.LARGE, stat.S_IFDIR, Origin.TEMPORARY_ROOT, threshold_kib
+        )
+        self.trees["/tmp/small"] = Tree(threshold_kib - 1, 0, in_use=False)
+        self.assertIsNone(
+            self._decision("small", stat.S_IFDIR, origin=Origin.TEMPORARY_ROOT)
+        )
+
+    def test_shared_memory_segment_needs_idleness_and_no_holders(self) -> None:
+        self._assert_one_day_idle_unused(
+            Kind.SEGMENT,
+            stat.S_IFREG,
+            Origin.SHARED_MEMORY,
+            _ALLOCATED_KIB,
+            root="/dev/shm",
+        )

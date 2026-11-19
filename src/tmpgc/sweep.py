@@ -7,7 +7,7 @@ import sys
 from collections.abc import Iterable, Iterator
 from pathlib import PurePosixPath
 
-from .config import SCAN_ROOT
+from .config import SCAN_ROOT, SHARED_MEMORY_ROOT
 from .entries import Entry, expand, normalize_path, parent_directory, walk
 from .rules import Context, Kind, Origin, Verdict, classify, decide
 
@@ -21,6 +21,7 @@ _SECTION = {
     Kind.EMPTY_SDK_DIRECTORY: 4,
     Kind.SCRATCH: 5,
     Kind.LARGE: 6,
+    Kind.SEGMENT: 7,
 }
 _MSBUILD_KINDS = {Kind.MSBUILD_DIRECTORY, Kind.MSBUILD_TEMP_DIRECTORY}
 _SIZE_UNITS = "KMGTPEZYRQ"
@@ -43,7 +44,7 @@ def _classify_entries(
         yield entry, kind
 
 
-def _temporary_entries(roots: Iterable[str], root_paths: set[str]) -> Iterator[Entry]:
+def _top_level_entries(roots: Iterable[str], root_paths: set[str]) -> Iterator[Entry]:
     # Nested roots are scan locations. Use original spellings for physical traversal.
     seen = root_paths.copy()
     for root in dict.fromkeys(roots):
@@ -73,12 +74,17 @@ def _candidates(context: Context) -> Iterator[tuple[Entry, Kind]]:
             walk(SCAN_ROOT, settings.depth), Origin.PRIMARY_SCAN, context
         ),
         *_classify_entries(
-            _temporary_entries(settings.temporary_roots, root_paths),
+            _top_level_entries(settings.temporary_roots, root_paths),
             Origin.TEMPORARY_ROOT,
             context,
         ),
         *_classify_entries(
             _scratch_entries(settings.scratch_patterns), Origin.SCRATCH_PATTERN, context
+        ),
+        *_classify_entries(
+            _top_level_entries((SHARED_MEMORY_ROOT,), root_paths),
+            Origin.SHARED_MEMORY,
+            context,
         ),
     ]
     protected = {PurePosixPath(root) for root in root_paths}
@@ -178,7 +184,7 @@ def run(context: Context, *, dry_run: bool, verbose: bool) -> int:
         removed += 1
         freed_kib += kib
 
-    freed = f"{format_size(freed_kib)} from scratch trees and large entries"
+    freed = f"{format_size(freed_kib)} from scratch trees, large entries and segments"
     if dry_run:
         print(
             f"Dry run: {removed} items would be removed ({freed}), {skipped} active items kept."
