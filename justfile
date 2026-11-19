@@ -5,19 +5,28 @@ script := justfile_directory() / "sh/ccleanup"
 units := justfile_directory() / "sh"
 bin_path := ".local/bin/ccleanup"
 bin := home_directory() / bin_path
+ruff := "ruff@0.17.5"
+basedpyright := "basedpyright@1.40.2"
 
 [private]
 default:
     @just --list
 
-# Run the script from this checkout: just run -n -v
+# Run tmpgc from this checkout: just run -n -v
 run *args:
-    "{{ script }}" "$@"
+    uv run tmpgc "$@"
 
-# Check the script's syntax and the units, including the command the service runs.
+# Format Python files.
+fmt:
+    uvx {{ ruff }} format .
+
+# Check Python formatting, lint rules, types and the current units.
 lint:
     #!/usr/bin/env bash
     set -euo pipefail
+    uvx {{ ruff }} format --check .
+    uvx {{ ruff }} check .
+    uvx {{ basedpyright }}
     bash -n {{ quote(script) }}
 
     verify_dir=$(mktemp -d)

@@ -1,0 +1,29 @@
+[project]
+name = "tmpgc"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+tmpgc = "tmpgc.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.ruff.lint]
+extend-select = ["RET503", "B905", "UP", "ANN2", "D100", "D104"]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+relative-imports-order = "closest-to-furthest"
+
+[tool.basedpyright]
+include = ["src"]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+reportExplicitAny = "error"
+reportImplicitOverride = "error"
+enableTypeIgnoreComments = false
+reportIgnoreCommentWithoutRule = "error"
+reportUnnecessaryTypeIgnoreComment = "error"
