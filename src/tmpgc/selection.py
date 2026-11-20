@@ -1,15 +1,13 @@
 """Select candidate entries in section order."""
 
 import os
+import stat
 from collections.abc import Iterable, Iterator
 from pathlib import PurePosixPath
 
 from .entries import Entry, children, expand, walk
 from .paths import location, with_ancestors
 from .rules import Context, Kind, Origin, classify
-
-
-_MSBUILD_KINDS = {Kind.MSBUILD_DIRECTORY, Kind.MSBUILD_TEMP_DIRECTORY}
 
 
 def _section_sort_rank(kind: Kind) -> int:
@@ -35,18 +33,10 @@ def _section_sort_rank(kind: Kind) -> int:
 def _classify_entries(
     entries: Iterable[Entry], origin: Origin, context: Context
 ) -> Iterator[tuple[Entry, Kind]]:
-    msbuild_roots: set[PurePosixPath] = set()
     for entry in entries:
         kind = classify(entry, origin, context)
-        if kind is None:
-            continue
-        if kind in _MSBUILD_KINDS:
-            # Bash prunes MSBuild trees in this section alone.
-            path = entry.location
-            if not msbuild_roots.isdisjoint(path.parents):
-                continue
-            msbuild_roots.add(path)
-        yield entry, kind
+        if kind is not None:
+            yield entry, kind
 
 
 def _top_level_entries(
@@ -75,7 +65,7 @@ def _scratch_entries(patterns: Iterable[str]) -> Iterator[Entry]:
 def candidates(context: Context) -> Iterator[tuple[Entry, Kind]]:
     settings = context.settings
     root_paths = {location(root) for root in settings.temporary_roots}
-    candidates = [
+    found = [
         *_classify_entries(
             walk(settings.scan_root, settings.depth, context.mounts),
             Origin.PRIMARY_SCAN,
@@ -95,16 +85,24 @@ def candidates(context: Context) -> Iterator[tuple[Entry, Kind]]:
             context,
         ),
     ]
+    # Removing a directory removes its contents, so the outermost selected directory governs them.
+    # Large entries yield to configured roots and specific candidates at or below them.
+    directories = {
+        entry.location
+        for entry, kind in found
+        if kind is not Kind.LARGE and stat.S_ISDIR(entry.info.st_mode)
+    }
     protected = with_ancestors(
         root_paths.union(
-            entry.location for entry, kind in candidates if kind is not Kind.LARGE
+            entry.location for entry, kind in found if kind is not Kind.LARGE
         )
     )
     yield from sorted(
         (
             (entry, kind)
-            for entry, kind in candidates
-            if kind is not Kind.LARGE or entry.location not in protected
+            for entry, kind in found
+            if directories.isdisjoint(entry.location.parents)
+            and (kind is not Kind.LARGE or entry.location not in protected)
         ),
         key=lambda candidate: (
             _section_sort_rank(candidate[1]),
