@@ -8,7 +8,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import PurePosixPath
 
 from .config import SCAN_ROOT, SHARED_MEMORY_ROOT
-from .entries import Entry, expand, normalize_path, parent_directory, walk
+from .entries import Entry, expand, normalize_path, parent_directory, used_kib, walk
 from .rules import Context, Kind, Origin, Verdict, classify, decide
 
 
@@ -185,12 +185,16 @@ def run(context: Context, *, dry_run: bool, verbose: bool) -> int:
         freed_kib += kib
 
     freed = f"{format_size(freed_kib)} from scratch trees, large entries and segments"
+    held = ", ".join(
+        f"{root} holds {format_size(used_kib(root))}"
+        for root in (SCAN_ROOT, SHARED_MEMORY_ROOT)
+    )
     if dry_run:
         print(
-            f"Dry run: {removed} items would be removed ({freed}), {skipped} active items kept."
+            f"Dry run: {removed} items would be removed ({freed}), {skipped} active items kept. {held}."
         )
     else:
         print(
-            f"Done: {removed} items removed ({freed}), {skipped} active items kept, {failed} failed."
+            f"Done: {removed} items removed ({freed}), {skipped} active items kept, {failed} failed. {held}."
         )
     return int(failed > 0)
