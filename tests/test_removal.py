@@ -1,6 +1,6 @@
 """Exercise physical removal."""
 
-from tmpgc.entries import walk
+from tmpgc.entries import entry_at
 from tmpgc.removal import remove
 
 from .filesystem_test_case import TreeTestCase
@@ -11,6 +11,7 @@ class RemovalTests(TreeTestCase):
         (self.root / "child").mkdir()
         for suffix in (".", "child/.."):
             with self.subTest(suffix=suffix):
-                entry = next(walk(f"{self.root}/{suffix}", 0))
+                entry = entry_at(f"{self.root}/{suffix}")
+                assert entry is not None
                 self.assertFalse(remove(entry))
                 self.assertTrue(self.file.is_file())

@@ -4,11 +4,12 @@ import os
 import stat
 from collections.abc import Generator, Iterator
 from collections.abc import Set as AbstractSet
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
 
+from .mounts import Mounts
 from .paths import location
 
 
@@ -88,42 +89,62 @@ def _children(directory: Entry, parent_fd: int) -> Generator[tuple[Entry, int]]:
         return
 
 
-def walk(root: str, depth: int | None = None) -> Iterator[Entry]:
-    try:
-        with parent_directory(root) as (parent_fd, name):
-            entry = Entry(root, os.lstat(name, dir_fd=parent_fd))
-            yield entry
-            if depth == 0 or not stat.S_ISDIR(entry.info.st_mode):
-                return
+@contextmanager
+def _opened(path: str) -> Generator[tuple[Entry, int]]:
+    with parent_directory(path) as (parent_fd, name):
+        yield Entry(path, os.lstat(name, dir_fd=parent_fd)), parent_fd
 
-            stack = [_children(entry, parent_fd)]
-            try:
-                while stack:
-                    child = next(stack[-1], None)
-                    if child is None:
-                        stack.pop()
-                        continue
-                    entry, fd = child
-                    yield entry
-                    if (depth is None or len(stack) < depth) and stat.S_ISDIR(
-                        entry.info.st_mode
-                    ):
-                        stack.append(_children(entry, fd))
-            finally:
-                for scan in reversed(stack):
-                    scan.close()
+
+def entry_at(path: str) -> Entry | None:
+    try:
+        with _opened(path) as (entry, _):
+            return entry
     except _SCAN_ERRORS:
-        return
+        return None
+
+
+def children(directory: str) -> Iterator[Entry]:
+    with suppress(*_SCAN_ERRORS), _opened(directory) as (entry, parent_fd):
+        if stat.S_ISDIR(entry.info.st_mode):
+            for child, _ in _children(entry, parent_fd):
+                yield child
+
+
+def walk(root: str, depth: int | None, mounts: Mounts) -> Iterator[Entry]:
+    with suppress(*_SCAN_ERRORS), _opened(root) as (entry, parent_fd):
+        yield entry
+        if depth == 0 or not stat.S_ISDIR(entry.info.st_mode):
+            return
+
+        stack = [_children(entry, parent_fd)]
+        try:
+            while stack:
+                child = next(stack[-1], None)
+                if child is None:
+                    stack.pop()
+                    continue
+                entry, fd = child
+                yield entry
+                # dir_cleanup skips child mounts, even when the scan root is a
+                # mount itself (systemd project, tmpfiles.c, 2026).
+                if (
+                    (depth is None or len(stack) < depth)
+                    and stat.S_ISDIR(entry.info.st_mode)
+                    and not mounts.is_mount(entry.location)
+                ):
+                    stack.append(_children(entry, fd))
+        finally:
+            for scan in reversed(stack):
+                scan.close()
 
 
 def _matches(directory: str, component: str) -> Iterator[Entry]:
     if not any(character in component for character in "*?["):
-        yield from walk(os.path.join(directory, component), 0)
+        if (entry := entry_at(os.path.join(directory, component))) is not None:
+            yield entry
         return
 
-    entries = walk(directory, 1)
-    next(entries, None)
-    for entry in entries:
+    for entry in children(directory):
         if entry.name.startswith(".") and not component.startswith("."):
             continue
         if fnmatchcase(entry.name, component):
@@ -131,7 +152,10 @@ def _matches(directory: str, component: str) -> Iterator[Entry]:
 
 
 def expand(pattern: str) -> Iterator[Entry]:
-    entries = list(walk("/", 0))
+    root = entry_at("/")
+    if root is None:
+        return
+    entries = [root]
     for component in pattern.split("/"):
         if component:
             entries = [
@@ -165,12 +189,15 @@ def used_kib(root: str) -> int:
     return (info.f_blocks - info.f_bfree) * info.f_frsize // 1024
 
 
-def measure(path: str, held: AbstractSet[FileId]) -> Tree | None:
+def measure(path: str, held: AbstractSet[FileId], mounts: Mounts) -> Tree | None:
     blocks = 0
     last_activity_ns: int | None = None
     in_use = False
     linked: set[FileId] = set()
-    for entry in walk(path):
+    for entry in walk(path, None, mounts):
+        # A child mount's own stat data also belongs to the mounted filesystem.
+        if entry.path != path and mounts.is_mount(entry.location):
+            continue
         info = entry.info
         identity = file_id(info)
         directory = stat.S_ISDIR(info.st_mode)

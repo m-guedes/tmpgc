@@ -68,13 +68,14 @@ def main() -> int:
         parser.error(str(error))
     now_ns = time.time_ns()
     observed = processes.observe()
+    mount_table = mounts.read()
     context = Context(
         settings=settings,
         now_ns=now_ns,
         uid=uid,
         processes=observed,
-        tree=lambda path: entries.measure(path, observed.held),
+        tree=lambda path: entries.measure(path, observed.held, mount_table),
         empty_dir=entries.empty_dir,
-        mounts=mounts.read(),
+        mounts=mount_table,
     )
     return sweep.run(context, dry_run=options.dry_run, verbose=options.verbose)

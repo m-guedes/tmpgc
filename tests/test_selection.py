@@ -51,19 +51,23 @@ class CandidateTests(SyntheticEntryTestCase):
             mounts=Mounts(()),
         )
 
-        def scan(path: str, depth: int | None) -> Iterator[Entry]:
-            yield self.entry(path)
+        def children(path: str) -> Iterator[Entry]:
             if path == "/tmp":
                 yield from (self.entry(child) for child in top_level)
-                if depth == context.settings.depth:
-                    yield socket
             elif path in {root, alias}:
                 yield self.entry(f"{path.rstrip('/')}/child")
             elif path == "/dev/shm":
                 yield segment
 
+        def scan(path: str, depth: int | None, mounts: Mounts) -> Iterator[Entry]:
+            yield self.entry(path)
+            yield from children(path)
+            if path == "/tmp" and depth == context.settings.depth:
+                yield socket
+
         with (
             patch("tmpgc.selection.walk", side_effect=scan),
+            patch("tmpgc.selection.children", side_effect=children),
             patch("tmpgc.selection.expand", return_value=iter((scratch,))),
         ):
             selected = [

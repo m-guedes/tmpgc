@@ -4,6 +4,7 @@ import os
 import time
 
 from tmpgc.entries import expand, measure
+from tmpgc.mounts import Mounts
 
 from .filesystem_test_case import TreeTestCase
 
@@ -24,7 +25,7 @@ class EntryTests(TreeTestCase):
         ):
             with self.subTest(path=path, times=times):
                 os.utime(path, ns=times)
-                tree = measure(str(self.root), frozenset())
+                tree = measure(str(self.root), frozenset(), Mounts(()))
                 assert tree is not None
                 self.assertEqual(tree.last_activity_ns, expected)
 

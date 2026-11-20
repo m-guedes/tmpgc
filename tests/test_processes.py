@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 from tmpgc.entries import measure
+from tmpgc.mounts import Mounts
 from tmpgc.processes import observe
 
 from .filesystem_test_case import TreeTestCase
@@ -12,7 +13,7 @@ from .filesystem_test_case import TreeTestCase
 
 class ProcessTests(TreeTestCase):
     def _tree_in_use(self) -> bool:
-        tree = measure(str(self.root), observe().held)
+        tree = measure(str(self.root), observe().held, Mounts(()))
         assert tree is not None
         return tree.in_use
 
