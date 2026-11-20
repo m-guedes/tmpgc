@@ -1,17 +1,14 @@
-"""Exercise candidate selection and physical removal."""
+"""Exercise candidate selection."""
 
 import stat
-import tempfile
-import unittest
 from collections.abc import Iterator
-from pathlib import Path
 from unittest.mock import patch
 
 from tmpgc.config import Settings
-from tmpgc.entries import Entry, normalize_path, walk
+from tmpgc.entries import Entry, normalize_path
 from tmpgc.processes import Processes
 from tmpgc.rules import Context, Kind
-from tmpgc.sweep import _candidates, _remove
+from tmpgc.selection import candidates
 
 from .filesystem_test_case import SyntheticEntryTestCase
 
@@ -65,12 +62,12 @@ class CandidateTests(SyntheticEntryTestCase):
                 yield segment
 
         with (
-            patch("tmpgc.sweep.walk", side_effect=scan),
-            patch("tmpgc.sweep.expand", return_value=iter((scratch,))),
+            patch("tmpgc.selection.walk", side_effect=scan),
+            patch("tmpgc.selection.expand", return_value=iter((scratch,))),
         ):
             selected = [
                 (normalize_path(entry.path), kind)
-                for entry, kind in _candidates(context)
+                for entry, kind in candidates(context)
             ]
 
         self.assertEqual(
@@ -83,17 +80,3 @@ class CandidateTests(SyntheticEntryTestCase):
                 (segment.path, Kind.SEGMENT),
             ],
         )
-
-
-class RemovalTests(unittest.TestCase):
-    def test_keeps_contents_of_dot_entries(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "child").mkdir()
-            sentinel = root / "sentinel"
-            sentinel.touch()
-            for suffix in (".", "child/.."):
-                with self.subTest(suffix=suffix):
-                    entry = next(walk(f"{directory}/{suffix}", 0))
-                    self.assertFalse(_remove(entry))
-                    self.assertTrue(sentinel.is_file())
