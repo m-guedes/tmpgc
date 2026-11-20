@@ -4,7 +4,6 @@ import os
 from collections.abc import Iterable, Iterator
 from pathlib import PurePosixPath
 
-from .config import SCAN_ROOT, SHARED_MEMORY_ROOT
 from .entries import Entry, children, expand, walk
 from .paths import location, with_ancestors
 from .rules import Context, Kind, Origin, classify
@@ -78,7 +77,7 @@ def candidates(context: Context) -> Iterator[tuple[Entry, Kind]]:
     root_paths = {location(root) for root in settings.temporary_roots}
     candidates = [
         *_classify_entries(
-            walk(SCAN_ROOT, settings.depth, context.mounts),
+            walk(settings.scan_root, settings.depth, context.mounts),
             Origin.PRIMARY_SCAN,
             context,
         ),
@@ -91,7 +90,7 @@ def candidates(context: Context) -> Iterator[tuple[Entry, Kind]]:
             _scratch_entries(settings.scratch_patterns), Origin.SCRATCH_PATTERN, context
         ),
         *_classify_entries(
-            _top_level_entries((SHARED_MEMORY_ROOT,), root_paths),
+            _top_level_entries((settings.shared_memory_root,), root_paths),
             Origin.SHARED_MEMORY,
             context,
         ),

@@ -2,7 +2,6 @@
 
 import sys
 
-from .config import SCAN_ROOT, SHARED_MEMORY_ROOT
 from .entries import used_kib
 from .removal import remove
 from .rules import Context, Verdict, decide
@@ -66,7 +65,7 @@ def run(context: Context, *, dry_run: bool, verbose: bool) -> int:
     freed = f"{_format_size(freed_kib)} from scratch trees, large entries and segments"
     held = ", ".join(
         f"{root} holds {_format_size(used_kib(root))}"
-        for root in (SCAN_ROOT, SHARED_MEMORY_ROOT)
+        for root in (context.settings.scan_root, context.settings.shared_memory_root)
     )
     if dry_run:
         print(

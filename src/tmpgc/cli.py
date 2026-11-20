@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 import time
+from dataclasses import replace
 from typing import Never, override
 
 from . import config, entries, mounts, processes, sweep
@@ -61,16 +62,16 @@ def main() -> int:
     options = parser.parse_args(namespace=_Options())
     uid = os.getuid()
     try:
-        settings = config.load(
-            path, uid, depth=options.depth, scratch_days=options.scratch_days
-        )
+        settings = config.load(path, uid)
     except config.ConfigError as error:
         parser.error(str(error))
     now_ns = time.time_ns()
     observed = processes.observe()
     mount_table = mounts.read()
     context = Context(
-        settings=settings,
+        settings=replace(
+            settings, depth=options.depth, scratch_days=options.scratch_days
+        ),
         now_ns=now_ns,
         uid=uid,
         processes=observed,

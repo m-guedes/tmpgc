@@ -1,86 +1,69 @@
 """Exercise candidate selection."""
 
-import stat
-from collections.abc import Iterator
-from unittest.mock import patch
+import os
+from socket import AF_UNIX, socket
 
 from tmpgc.config import Settings
-from tmpgc.entries import Entry
+from tmpgc.entries import empty_dir
 from tmpgc.mounts import Mounts
 from tmpgc.processes import Processes
 from tmpgc.rules import Context, Kind
 from tmpgc.selection import candidates
 
-from .filesystem_test_case import SyntheticEntryTestCase
+from .filesystem_test_case import TreeTestCase
 
 
-class CandidateTests(SyntheticEntryTestCase):
+class CandidateTests(TreeTestCase):
     def test_large_selection_preserves_specific_rules_and_roots(self) -> None:
-        root = "/tmp/configured-root"
-        alias = "//tmp/configured-root/./"
-        sdk_named_root = "/tmp/CfgDir"
-        scratch = self.entry("/tmp/scratch-holder/scratch")
-        socket = self.entry("/tmp/socket-holder/open.sock", stat.S_IFSOCK)
-        segment = self.entry("/dev/shm/pool", stat.S_IFREG)
-        plain = "/tmp/root-holder-extra"
-        top_level = (
-            "/tmp/scratch-holder",
-            "/tmp/socket-holder",
-            root,
+        root = self.root / "configured-root"
+        alias = f"/{root}/./"
+        sdk_named_root = self.root / "CfgDir"
+        nested_root = self.root / "root-holder" / "nested"
+        scratch = self.root / "scratch-holder" / "scratch"
+        socket_path = self.root / "socket-holder" / "open.sock"
+        shm = self.root / "shm"
+        segment = shm / "pool"
+        child = root / "child"
+        for directory in (
+            child,
             sdk_named_root,
-            "/tmp/root-holder",
-            plain,
-        )
+            nested_root,
+            scratch,
+            socket_path.parent,
+            shm,
+        ):
+            directory.mkdir(parents=True)
+        self.enterContext(socket(AF_UNIX)).bind(str(socket_path))
+        segment.touch()
         context = Context(
             settings=Settings(
                 (
-                    "/tmp",
+                    str(self.root),
                     alias,
-                    root,
-                    sdk_named_root,
-                    "/tmp/root-holder/nested",
-                    "/dev/shm",
+                    str(root),
+                    str(sdk_named_root),
+                    str(nested_root),
+                    str(shm),
                 ),
-                ("/tmp/scratch-holder/*",),
+                (str(scratch.parent / "*"),),
+                scan_root=str(self.root),
+                shared_memory_root=str(shm),
             ),
             processes=Processes({}, frozenset(), frozenset(), 0, 100),
             now_ns=0,
-            uid=self.uid,
+            uid=os.getuid(),
             tree=lambda _: None,
-            empty_dir=lambda path: path == sdk_named_root,
+            empty_dir=empty_dir,
             mounts=Mounts(()),
         )
 
-        def children(path: str) -> Iterator[Entry]:
-            if path == "/tmp":
-                yield from (self.entry(child) for child in top_level)
-            elif path in {root, alias}:
-                yield self.entry(f"{path.rstrip('/')}/child")
-            elif path == "/dev/shm":
-                yield segment
-
-        def scan(path: str, depth: int | None, mounts: Mounts) -> Iterator[Entry]:
-            yield self.entry(path)
-            yield from children(path)
-            if path == "/tmp" and depth == context.settings.depth:
-                yield socket
-
-        with (
-            patch("tmpgc.selection.walk", side_effect=scan),
-            patch("tmpgc.selection.children", side_effect=children),
-            patch("tmpgc.selection.expand", return_value=iter((scratch,))),
-        ):
-            selected = [
-                (str(entry.location), kind) for entry, kind in candidates(context)
-            ]
-
         self.assertEqual(
-            selected,
+            [(entry.location, kind) for entry, kind in candidates(context)],
             [
-                (socket.path, Kind.SOCKET),
-                (scratch.path, Kind.SCRATCH),
-                (f"{root}/child", Kind.LARGE),
-                (plain, Kind.LARGE),
-                (segment.path, Kind.SEGMENT),
+                (socket_path, Kind.SOCKET),
+                (scratch, Kind.SCRATCH),
+                (child, Kind.LARGE),
+                (self.file, Kind.LARGE),
+                (segment, Kind.SEGMENT),
             ],
         )

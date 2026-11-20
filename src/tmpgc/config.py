@@ -24,6 +24,8 @@ class Settings:
     large_entry_mib: int = 100
     large_entry_days: int = 1
     segment_days: int = 1
+    scan_root: str = SCAN_ROOT
+    shared_memory_root: str = SHARED_MEMORY_ROOT
 
 
 class ConfigError(ValueError):
@@ -49,13 +51,7 @@ def _absolute_strings(value: object, key: str) -> tuple[str, ...]:
     return tuple(paths)
 
 
-def load(
-    path: Path,
-    uid: int,
-    *,
-    depth: int = DEFAULT_DEPTH,
-    scratch_days: int = DEFAULT_SCRATCH_DAYS,
-) -> Settings:
+def load(path: Path, uid: int) -> Settings:
     try:
         with path.open("rb") as file:
             document = tomllib.load(file)
@@ -82,6 +78,4 @@ def load(
     return Settings(
         (SCAN_ROOT, *roots),
         (f"{SCAN_ROOT}/claude-{uid}/*/*", f"{SCAN_ROOT}/*/claude-{uid}/*/*", *patterns),
-        depth=depth,
-        scratch_days=scratch_days,
     )
