@@ -1,7 +1,7 @@
 """Exercise physical removal."""
 
 from tmpgc.entries import entry_at
-from tmpgc.removal import remove
+from tmpgc.removal import RemovalError, remove
 
 from .filesystem_test_case import TreeTestCase
 
@@ -13,5 +13,6 @@ class RemovalTests(TreeTestCase):
             with self.subTest(suffix=suffix):
                 entry = entry_at(f"{self.root}/{suffix}")
                 assert entry is not None
-                self.assertFalse(remove(entry))
+                with self.assertRaises(RemovalError):
+                    remove(entry)
                 self.assertTrue(self.file.is_file())

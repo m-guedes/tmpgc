@@ -1,78 +1,29 @@
-"""Run the cleanup sections and report their results."""
+"""Apply cleanup decisions to selected entries."""
 
-import sys
-
-from .entries import used_kib
-from .removal import remove
+from .removal import RemovalError, remove
+from .report import Report
 from .rules import Context, Verdict, decide
 from .selection import candidates
 
 
-__all__ = ["run"]
-_SIZE_UNITS = "KMGTPEZYRQ"
-
-
-def _format_size(kib: int) -> str:
-    if kib == 0:
-        return "0"
-    scale = 1
-    index = 0
-    # numfmt rounds upward and promotes to the next unit if rounding reaches 1024.
-    while (kib + scale - 1) // scale >= 1024 and index < len(_SIZE_UNITS) - 1:
-        scale *= 1024
-        index += 1
-    unit = _SIZE_UNITS[index]
-    tenths = (kib * 10 + scale - 1) // scale
-    if tenths < 100:
-        return f"{tenths // 10}.{tenths % 10}{unit}"
-    return f"{(kib + scale - 1) // scale}{unit}"
-
-
 def run(context: Context, *, dry_run: bool, verbose: bool) -> int:
-    removed = 0
-    skipped = 0
-    failed = 0
-    freed_kib = 0
-
+    report = Report(dry_run=dry_run, verbose=verbose)
     for entry, kind in candidates(context):
         decision = decide(entry, kind, context)
         if decision is None:
             continue
-        path = entry.path
-        reason = decision.reason
         if decision.verdict is Verdict.KEEP:
-            if verbose:
-                print(f"SKIP ({reason}): {path}")
-            skipped += 1
+            report.kept(entry.path, decision.reason)
             continue
 
-        kib = 0
-        if decision.allocated_kib is not None:
-            kib = decision.allocated_kib
-            reason = f"{reason}, {_format_size(kib)}"
-        if dry_run:
-            print(f"WOULD REMOVE ({reason}): {path}")
-        else:
-            if verbose:
-                print(f"REMOVING ({reason}): {path}")
-            if not remove(entry):
-                print(f"FAILED ({reason}): {path}", file=sys.stderr)
-                failed += 1
+        report.removing(entry.path, decision)
+        if not dry_run:
+            try:
+                remove(entry)
+            except RemovalError as error:
+                report.failed(entry.path, decision, error)
                 continue
-        removed += 1
-        freed_kib += kib
+        report.removed(decision)
 
-    size = _format_size(freed_kib)
-    held = ", ".join(
-        f"{root} holds {_format_size(used_kib(root))}"
-        for root in (context.settings.scan_root, context.settings.shared_memory_root)
-    )
-    if dry_run:
-        print(
-            f"Dry run: {removed} items would be removed ({size} to free), {skipped} active items kept. {held}."
-        )
-    else:
-        print(
-            f"Done: {removed} items removed ({size} freed), {skipped} active items kept, {failed} failed. {held}."
-        )
-    return int(failed > 0)
+    report.summary((context.settings.scan_root, context.settings.shared_memory_root))
+    return report.exit_status()

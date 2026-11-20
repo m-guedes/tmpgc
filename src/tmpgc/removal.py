@@ -7,30 +7,44 @@ import stat
 from .entries import Entry, parent_directory
 
 
-def remove(entry: Entry) -> bool:
-    failed = False
+class RemovalError(Exception):
+    """The scanned entry could not be removed."""
 
-    def record_error(_operation: object, _path: str, error: BaseException) -> None:
-        nonlocal failed
+
+def _remove_tree(name: str, parent_fd: int) -> None:
+    first_error: tuple[str, OSError] | None = None
+
+    def record_error(_operation: object, path: str, error: BaseException) -> None:
+        nonlocal first_error
         if not isinstance(error, OSError):
             raise error
-        if not isinstance(error, FileNotFoundError):
-            failed = True
+        # Continue removing siblings while retaining the first failure and its path.
+        if first_error is None and not isinstance(error, FileNotFoundError):
+            first_error = path, error
 
+    shutil.rmtree(name, dir_fd=parent_fd, onexc=record_error)
+    if first_error is not None:
+        path, error = first_error
+        # CPython's rmtree adds a filename even to message-only OSErrors.
+        # Their original message is in the exception arguments (shutil.py, 2026).
+        cause = error.strerror or BaseException.__str__(error)
+        raise RemovalError(f"{path}: {cause}") from error
+
+
+def remove(entry: Entry) -> None:
     try:
         with parent_directory(entry.path) as (fd, name):
             # rm -rf refuses dot entries and the filesystem root.
             if name in {".", ".."}:
-                return False
+                raise RemovalError(f"refusing to remove dot entry {name!r}")
             current = os.lstat(name, dir_fd=fd)
             if not os.path.samestat(entry.info, current):
-                return False
+                raise RemovalError("entry changed since scan")
             if stat.S_ISDIR(current.st_mode):
-                shutil.rmtree(name, dir_fd=fd, onexc=record_error)
+                _remove_tree(name, fd)
             else:
                 os.unlink(name, dir_fd=fd)
     except FileNotFoundError:
-        pass
-    except OSError:
-        return False
-    return not failed
+        return
+    except OSError as error:
+        raise RemovalError(str(error)) from error

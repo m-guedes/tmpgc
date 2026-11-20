@@ -182,13 +182,6 @@ def empty_dir(path: str) -> bool:
         return False
 
 
-def used_kib(root: str) -> int:
-    # df's Used column. The Open Group, POSIX.1-2024 sys/statvfs.h (2024),
-    # defines f_blocks and f_bfree in units of f_frsize.
-    info = os.statvfs(root)
-    return (info.f_blocks - info.f_bfree) * info.f_frsize // 1024
-
-
 def measure(path: str, held: AbstractSet[FileId], mounts: Mounts) -> Tree | None:
     blocks = 0
     last_activity_ns: int | None = None
