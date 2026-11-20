@@ -5,15 +5,10 @@ import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING
 
-from .entries import normalize_path
-
-
-if TYPE_CHECKING:
-    from .config import Settings
-    from .entries import Entry, Tree
-    from .processes import Processes
+from .config import Settings
+from .entries import Entry, Tree, normalize_path
+from .processes import Processes
 
 
 _MINUTE_NS = 60 * 10**9
