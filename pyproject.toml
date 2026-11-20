@@ -24,6 +24,7 @@ pythonVersion = "3.14"
 typeCheckingMode = "strict"
 reportExplicitAny = "error"
 reportImplicitOverride = "error"
+reportMatchNotExhaustive = "error"
 enableTypeIgnoreComments = false
 reportIgnoreCommentWithoutRule = "error"
 reportUnnecessaryTypeIgnoreComment = "error"

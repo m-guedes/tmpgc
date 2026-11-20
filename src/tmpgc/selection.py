@@ -9,18 +9,27 @@ from .entries import Entry, expand, normalize_path, walk
 from .rules import Context, Kind, Origin, classify
 
 
-_SECTION = {
-    Kind.SOCKET: 0,
-    Kind.DEBUGGER_PIPE: 1,
-    Kind.MSBUILD_DIRECTORY: 2,
-    Kind.MSBUILD_TEMP_DIRECTORY: 2,
-    Kind.NUGET_PROBE: 3,
-    Kind.EMPTY_SDK_DIRECTORY: 4,
-    Kind.SCRATCH: 5,
-    Kind.LARGE: 6,
-    Kind.SEGMENT: 7,
-}
 _MSBUILD_KINDS = {Kind.MSBUILD_DIRECTORY, Kind.MSBUILD_TEMP_DIRECTORY}
+
+
+def _section(kind: Kind) -> int:
+    match kind:
+        case Kind.SOCKET:
+            return 0
+        case Kind.DEBUGGER_PIPE:
+            return 1
+        case Kind.MSBUILD_DIRECTORY | Kind.MSBUILD_TEMP_DIRECTORY:
+            return 2
+        case Kind.NUGET_PROBE:
+            return 3
+        case Kind.EMPTY_SDK_DIRECTORY:
+            return 4
+        case Kind.SCRATCH:
+            return 5
+        case Kind.LARGE:
+            return 6
+        case Kind.SEGMENT:
+            return 7
 
 
 def _classify_entries(
@@ -97,5 +106,5 @@ def candidates(context: Context) -> Iterator[tuple[Entry, Kind]]:
             if kind is not Kind.LARGE
             or PurePosixPath(normalize_path(entry.path)) not in protected
         ),
-        key=lambda candidate: (_SECTION[candidate[1]], os.fsencode(candidate[0].path)),
+        key=lambda candidate: (_section(candidate[1]), os.fsencode(candidate[0].path)),
     )
