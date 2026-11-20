@@ -62,17 +62,17 @@ def run(context: Context, *, dry_run: bool, verbose: bool) -> int:
         removed += 1
         freed_kib += kib
 
-    freed = f"{_format_size(freed_kib)} from scratch trees, large entries and segments"
+    size = _format_size(freed_kib)
     held = ", ".join(
         f"{root} holds {_format_size(used_kib(root))}"
         for root in (context.settings.scan_root, context.settings.shared_memory_root)
     )
     if dry_run:
         print(
-            f"Dry run: {removed} items would be removed ({freed}), {skipped} active items kept. {held}."
+            f"Dry run: {removed} items would be removed ({size} to free), {skipped} active items kept. {held}."
         )
     else:
         print(
-            f"Done: {removed} items removed ({freed}), {skipped} active items kept, {failed} failed. {held}."
+            f"Done: {removed} items removed ({size} freed), {skipped} active items kept, {failed} failed. {held}."
         )
     return int(failed > 0)

@@ -3,6 +3,7 @@
 import os
 import tomllib
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -18,12 +19,12 @@ class Settings:
     temporary_roots: tuple[str, ...]
     scratch_patterns: tuple[str, ...]
     depth: int = DEFAULT_DEPTH
-    scratch_days: int = DEFAULT_SCRATCH_DAYS
-    build_litter_minutes: int = 60
-    empty_directory_minutes: int = 24 * 60
+    scratch_idle: timedelta = timedelta(days=DEFAULT_SCRATCH_DAYS)
+    build_litter_idle: timedelta = timedelta(minutes=60)
+    empty_directory_idle: timedelta = timedelta(days=1)
     large_entry_mib: int = 100
-    large_entry_days: int = 1
-    segment_days: int = 1
+    large_entry_idle: timedelta = timedelta(days=1)
+    segment_idle: timedelta = timedelta(days=1)
     scan_root: str = SCAN_ROOT
     shared_memory_root: str = SHARED_MEMORY_ROOT
 

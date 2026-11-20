@@ -162,7 +162,12 @@ class RuleTests(SyntheticEntryTestCase):
     def test_removes_msbuild_directory_for_exited_pid(self) -> None:
         self.assertEqual(
             self._decision("MSBuild43", stat.S_IFDIR),
-            Decision(Kind.MSBUILD_DIRECTORY, Verdict.REMOVE, "stale MSBuild dir"),
+            Decision(
+                Kind.MSBUILD_DIRECTORY,
+                Verdict.REMOVE,
+                "stale MSBuild dir",
+                _ALLOCATED_KIB,
+            ),
         )
 
     def test_keeps_msbuild_directory_for_live_pid(self) -> None:
@@ -181,7 +186,10 @@ class RuleTests(SyntheticEntryTestCase):
         self.assertEqual(
             self._decision("MSBuildTempOld", stat.S_IFDIR),
             Decision(
-                Kind.MSBUILD_TEMP_DIRECTORY, Verdict.REMOVE, "MSBuildTemp idle >60m"
+                Kind.MSBUILD_TEMP_DIRECTORY,
+                Verdict.REMOVE,
+                "MSBuildTemp idle >60m",
+                _ALLOCATED_KIB,
             ),
         )
 
@@ -191,7 +199,7 @@ class RuleTests(SyntheticEntryTestCase):
             Decision(
                 Kind.MSBUILD_TEMP_DIRECTORY,
                 Verdict.KEEP,
-                "MSBuildTemp active within 60m",
+                "MSBuildTemp touched within 60m",
             ),
         )
 
@@ -203,23 +211,34 @@ class RuleTests(SyntheticEntryTestCase):
                 origin=Origin.TEMPORARY_ROOT,
                 seconds_ago=3601,
             ),
-            Decision(Kind.NUGET_PROBE, Verdict.REMOVE, "NuGet probe file"),
+            Decision(
+                Kind.NUGET_PROBE,
+                Verdict.REMOVE,
+                "NuGet probe idle >60m",
+                _ALLOCATED_KIB,
+            ),
         )
 
     def test_keeps_nuget_probe_at_age_limit(self) -> None:
-        self.assertIsNone(
+        self.assertEqual(
             self._decision(
                 "CASESENSITIVETEST42",
                 stat.S_IFREG,
                 origin=Origin.TEMPORARY_ROOT,
                 seconds_ago=3600,
-            )
+            ),
+            Decision(Kind.NUGET_PROBE, Verdict.KEEP, "NuGet probe touched within 60m"),
         )
 
     def test_removes_old_empty_sdk_directory(self) -> None:
         self.assertEqual(
             self._decision("AbCd42", stat.S_IFDIR, origin=Origin.TEMPORARY_ROOT),
-            Decision(Kind.EMPTY_SDK_DIRECTORY, Verdict.REMOVE, "empty .NET temp dir"),
+            Decision(
+                Kind.EMPTY_SDK_DIRECTORY,
+                Verdict.REMOVE,
+                "empty .NET temp dir idle >1d",
+                _ALLOCATED_KIB,
+            ),
         )
 
     def test_keeps_nonempty_sdk_directory(self) -> None:

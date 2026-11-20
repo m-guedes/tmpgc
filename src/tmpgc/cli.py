@@ -5,6 +5,7 @@ import os
 import sys
 import time
 from dataclasses import replace
+from datetime import timedelta
 from typing import Never, override
 
 from . import config, entries, mounts, processes, sweep
@@ -60,6 +61,8 @@ def main() -> int:
         help="idle days before scratch removal (default: %(default)s)",
     )
     options = parser.parse_args(namespace=_Options())
+    if options.scratch_days > timedelta.max.days:
+        parser.error(f"-s accepts at most {timedelta.max.days} days")
     uid = os.getuid()
     try:
         settings = config.load(path, uid)
@@ -70,7 +73,9 @@ def main() -> int:
     mount_table = mounts.read()
     context = Context(
         settings=replace(
-            settings, depth=options.depth, scratch_days=options.scratch_days
+            settings,
+            depth=options.depth,
+            scratch_idle=timedelta(days=options.scratch_days),
         ),
         now_ns=now_ns,
         uid=uid,

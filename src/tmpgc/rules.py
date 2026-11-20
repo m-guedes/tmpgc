@@ -4,6 +4,7 @@ import re
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import Enum, auto
 
 from .config import Settings
@@ -12,10 +13,10 @@ from .mounts import Mounts
 from .processes import Processes
 
 
-_MINUTE_NS = 60 * 10**9
 _DEBUGGER_PIPE = re.compile(r"clr-debug-pipe-([0-9]+)-([0-9]+)-(?:in|out)")
 _DIAGNOSTIC_SOCKET = re.compile(r"dotnet-diagnostic-([0-9]+)-([0-9]+)-socket")
 _MSBUILD_OWNER = re.compile(r"MSBuild([0-9]+)")
+_SDK_DIRECTORY = re.compile(r"[A-Za-z0-9]{6}")
 
 
 class Origin(Enum):
@@ -63,77 +64,95 @@ class Context:
 
 @dataclass(frozen=True, slots=True)
 class _Owner:
-    pid: str
+    pid: int
     start_ticks: int | None
 
 
 def classify(entry: Entry, origin: Origin, context: Context) -> Kind | None:
     mode = entry.info.st_mode
     name = entry.name
-    if origin is Origin.SCRATCH_PATTERN:
-        return Kind.SCRATCH if entry.info.st_uid == context.uid else None
-    if origin is Origin.SHARED_MEMORY:
-        return (
-            Kind.SEGMENT
-            if stat.S_ISREG(mode) and entry.info.st_uid == context.uid
-            else None
-        )
-    if origin is Origin.TEMPORARY_ROOT:
-        if entry.info.st_uid != context.uid:
+    match origin:
+        case Origin.PRIMARY_SCAN:
+            if stat.S_ISSOCK(mode):
+                return Kind.SOCKET
+            if stat.S_ISFIFO(mode) and _DEBUGGER_PIPE.fullmatch(name):
+                return Kind.DEBUGGER_PIPE
+            if stat.S_ISDIR(mode) and name.startswith("MSBuild"):
+                return (
+                    Kind.MSBUILD_TEMP_DIRECTORY
+                    if name.startswith("MSBuildTemp")
+                    else Kind.MSBUILD_DIRECTORY
+                )
             return None
-        if stat.S_ISREG(mode) and name.startswith("CASESENSITIVETEST"):
-            return Kind.NUGET_PROBE
-        if (
-            stat.S_ISDIR(mode)
-            and re.fullmatch(r"[A-Za-z0-9]{6}", name)
-            and context.empty_dir(entry.path)
-        ):
-            return Kind.EMPTY_SDK_DIRECTORY
-        return Kind.LARGE
 
-    if stat.S_ISSOCK(mode):
-        return Kind.SOCKET
-    if stat.S_ISFIFO(mode) and _DEBUGGER_PIPE.fullmatch(name):
-        return Kind.DEBUGGER_PIPE
-    if stat.S_ISDIR(mode) and name.startswith("MSBuild"):
-        return (
-            Kind.MSBUILD_TEMP_DIRECTORY
-            if name.startswith("MSBuildTemp")
-            else Kind.MSBUILD_DIRECTORY
-        )
-    return None
+        case Origin.TEMPORARY_ROOT:
+            if entry.info.st_uid != context.uid:
+                return None
+            if (
+                stat.S_ISREG(mode)
+                and name.startswith("CASESENSITIVETEST")
+                and entry.info.st_size == 0
+            ):
+                return Kind.NUGET_PROBE
+            if (
+                stat.S_ISDIR(mode)
+                and _SDK_DIRECTORY.fullmatch(name)
+                and context.empty_dir(entry.path)
+            ):
+                return Kind.EMPTY_SDK_DIRECTORY
+            return Kind.LARGE
+
+        case Origin.SCRATCH_PATTERN:
+            return Kind.SCRATCH if entry.info.st_uid == context.uid else None
+
+        case Origin.SHARED_MEMORY:
+            return (
+                Kind.SEGMENT
+                if stat.S_ISREG(mode) and entry.info.st_uid == context.uid
+                else None
+            )
 
 
 def _owner(name: str) -> _Owner | None:
     match = _DEBUGGER_PIPE.fullmatch(name) or _DIAGNOSTIC_SOCKET.fullmatch(name)
     if match is not None:
-        return _Owner(match[1], int(match[2]))
+        return _Owner(int(match[1]), int(match[2]))
     if (match := _MSBUILD_OWNER.fullmatch(name)) is not None:
-        return _Owner(match[1], None)
+        return _Owner(int(match[1]), None)
     return None
 
 
 def _owner_live(owner: _Owner, entry: Entry, context: Context) -> bool:
-    pid = int(owner.pid)
     if owner.start_ticks is not None:
-        return context.processes.started_at(pid, owner.start_ticks)
+        return context.processes.started_at(owner.pid, owner.start_ticks)
     return context.processes.started_no_later_than(
-        pid, context.uid, entry.info.st_mtime_ns
+        owner.pid, context.uid, entry.info.st_mtime_ns
     )
 
 
-def _idle(tree: Tree, minutes: int, context: Context) -> bool:
-    return tree.last_activity_ns < context.now_ns - minutes * _MINUTE_NS
+def _span(threshold: timedelta) -> str:
+    if not threshold % timedelta(days=1):
+        return f"{threshold.days}d"
+    return f"{threshold // timedelta(minutes=1)}m"
+
+
+def _idle(
+    kind: Kind, tree: Tree, threshold: timedelta, label: str, context: Context
+) -> Decision:
+    threshold_ns = (threshold // timedelta(microseconds=1)) * 1000
+    span = _span(threshold)
+    if context.now_ns - tree.last_activity_ns <= threshold_ns:
+        return Decision(kind, Verdict.KEEP, f"{label} touched within {span}")
+    return Decision(kind, Verdict.REMOVE, f"{label} idle >{span}", tree.allocated_kib)
 
 
 def _idle_unused(
-    kind: Kind, tree: Tree, days: int, label: str, context: Context
+    kind: Kind, tree: Tree, threshold: timedelta, label: str, context: Context
 ) -> Decision:
-    if not _idle(tree, days * 24 * 60, context):
-        return Decision(kind, Verdict.KEEP, f"{label} touched within {days}d")
-    if tree.in_use:
+    decision = _idle(kind, tree, threshold, label, context)
+    if decision.verdict is Verdict.REMOVE and tree.in_use:
         return Decision(kind, Verdict.KEEP, f"{label} held by a live process")
-    return Decision(kind, Verdict.REMOVE, f"{label} idle >{days}d", tree.allocated_kib)
+    return decision
 
 
 def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
@@ -151,7 +170,7 @@ def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
 def _decide_kind(entry: Entry, kind: Kind, context: Context) -> Decision | None:
     path = entry.path
     name = entry.name
-    build_minutes = context.settings.build_litter_minutes
+    settings = context.settings
     match kind:
         case Kind.SOCKET:
             if path in context.processes.bound_sockets:
@@ -161,65 +180,49 @@ def _decide_kind(entry: Entry, kind: Kind, context: Context) -> Decision | None:
                 return Decision(kind, Verdict.KEEP, "active socket")
             return Decision(kind, Verdict.REMOVE, "stale socket")
 
-        case Kind.DEBUGGER_PIPE | Kind.MSBUILD_DIRECTORY:
+        case Kind.DEBUGGER_PIPE:
             owner = _owner(name)
             if owner is not None and _owner_live(owner, entry, context):
                 return Decision(kind, Verdict.KEEP, f"pid {owner.pid} alive")
-            if kind is Kind.MSBUILD_DIRECTORY:
-                if owner is None:
-                    return Decision(kind, Verdict.KEEP, "MSBuild dir without PID")
-                return Decision(kind, Verdict.REMOVE, "stale MSBuild dir")
             return Decision(kind, Verdict.REMOVE, "stale clr-debug-pipe")
 
+        case Kind.MSBUILD_DIRECTORY:
+            owner = _owner(name)
+            if owner is None:
+                return Decision(kind, Verdict.KEEP, "MSBuild dir without PID")
+            if _owner_live(owner, entry, context):
+                return Decision(kind, Verdict.KEEP, f"pid {owner.pid} alive")
+            tree = context.tree(path)
+            if tree is None:
+                return None
+            return Decision(
+                kind, Verdict.REMOVE, "stale MSBuild dir", tree.allocated_kib
+            )
+
         case Kind.MSBUILD_TEMP_DIRECTORY:
-            tree = context.tree(path)
-            if tree is None:
-                return None
-            if not _idle(tree, build_minutes, context):
-                return Decision(
-                    kind, Verdict.KEEP, f"MSBuildTemp active within {build_minutes}m"
-                )
-            return Decision(kind, Verdict.REMOVE, f"MSBuildTemp idle >{build_minutes}m")
-
+            rule, threshold, label = _idle, settings.build_litter_idle, "MSBuildTemp"
         case Kind.NUGET_PROBE:
-            if entry.info.st_size != 0:
-                return None
-            tree = context.tree(path)
-            if tree is not None and _idle(tree, build_minutes, context):
-                return Decision(kind, Verdict.REMOVE, "NuGet probe file")
-            return None
-
+            rule, threshold, label = _idle, settings.build_litter_idle, "NuGet probe"
         case Kind.EMPTY_SDK_DIRECTORY:
-            tree = context.tree(path)
-            if tree is not None and _idle(
-                tree, context.settings.empty_directory_minutes, context
-            ):
-                return Decision(kind, Verdict.REMOVE, "empty .NET temp dir")
-            return None
-
+            rule, threshold, label = (
+                _idle,
+                settings.empty_directory_idle,
+                "empty .NET temp dir",
+            )
         case Kind.SCRATCH:
-            tree = context.tree(path)
-            if tree is None:
-                return None
-            return _idle_unused(
-                kind, tree, context.settings.scratch_days, "scratch", context
-            )
-
+            rule, threshold, label = _idle_unused, settings.scratch_idle, "scratch"
         case Kind.LARGE:
-            tree = context.tree(path)
-            if (
-                tree is None
-                or tree.allocated_kib < context.settings.large_entry_mib * 1024
-            ):
-                return None
-            return _idle_unused(
-                kind, tree, context.settings.large_entry_days, "large entry", context
+            rule, threshold, label = (
+                _idle_unused,
+                settings.large_entry_idle,
+                "large entry",
             )
-
         case Kind.SEGMENT:
-            tree = context.tree(path)
-            if tree is None:
-                return None
-            return _idle_unused(
-                kind, tree, context.settings.segment_days, "segment", context
-            )
+            rule, threshold, label = _idle_unused, settings.segment_idle, "segment"
+
+    tree = context.tree(path)
+    if tree is None or (
+        kind is Kind.LARGE and tree.allocated_kib < settings.large_entry_mib * 1024
+    ):
+        return None
+    return rule(kind, tree, threshold, label, context)
