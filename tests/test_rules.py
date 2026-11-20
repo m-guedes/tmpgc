@@ -3,12 +3,12 @@
 import stat
 from dataclasses import replace
 
-from filesystem_test_case import SyntheticEntryTestCase
-
 from tmpgc.config import Settings
 from tmpgc.entries import Tree
 from tmpgc.processes import Process, Processes
 from tmpgc.rules import Context, Decision, Kind, Origin, Verdict, classify, decide
+
+from .filesystem_test_case import SyntheticEntryTestCase
 
 
 _SECOND_NS = 10**9

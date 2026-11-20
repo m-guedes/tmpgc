@@ -28,7 +28,7 @@ lint:
 
 # Run the cleanup rule tests.
 test:
-    uv run python -m unittest discover -s tests
+    uv run python -m unittest discover -s tests -t .
 
 # Install tmpgc, link the user units and start the hourly timer.
 install:

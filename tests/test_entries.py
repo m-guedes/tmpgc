@@ -3,9 +3,9 @@
 import os
 import time
 
-from filesystem_test_case import TreeTestCase
-
 from tmpgc.entries import expand, measure
+
+from .filesystem_test_case import TreeTestCase
 
 
 class EntryTests(TreeTestCase):

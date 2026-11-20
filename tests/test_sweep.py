@@ -7,13 +7,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
-from filesystem_test_case import SyntheticEntryTestCase
-
 from tmpgc.config import Settings
 from tmpgc.entries import Entry, normalize_path, walk
 from tmpgc.processes import Processes
 from tmpgc.rules import Context, Kind
 from tmpgc.sweep import _candidates, _remove
+
+from .filesystem_test_case import SyntheticEntryTestCase
 
 
 class CandidateTests(SyntheticEntryTestCase):
