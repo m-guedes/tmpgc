@@ -12,7 +12,7 @@ from .rules import Context, Kind, Origin, classify
 _MSBUILD_KINDS = {Kind.MSBUILD_DIRECTORY, Kind.MSBUILD_TEMP_DIRECTORY}
 
 
-def _section(kind: Kind) -> int:
+def _section_sort_rank(kind: Kind) -> int:
     match kind:
         case Kind.SOCKET:
             return 0
@@ -106,5 +106,8 @@ def candidates(context: Context) -> Iterator[tuple[Entry, Kind]]:
             if kind is not Kind.LARGE
             or PurePosixPath(normalize_path(entry.path)) not in protected
         ),
-        key=lambda candidate: (_section(candidate[1]), os.fsencode(candidate[0].path)),
+        key=lambda candidate: (
+            _section_sort_rank(candidate[1]),
+            os.fsencode(candidate[0].path),
+        ),
     )
