@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 from .config import Settings
-from .entries import Entry, Tree, normalize_path
+from .entries import Entry, Tree
+from .mounts import Mounts
 from .processes import Processes
 
 
@@ -57,7 +58,7 @@ class Context:
     uid: int
     tree: Callable[[str], Tree | None]
     empty_dir: Callable[[str], bool]
-    mount_points: frozenset[str]
+    mounts: Mounts
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,14 +137,19 @@ def _idle_unused(
 
 
 def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
-    path = entry.path
-    normalized = normalize_path(path)
-    prefix = normalized.rstrip("/") + "/"
-    if normalized in context.mount_points or any(
-        mount.startswith(prefix) for mount in context.mount_points
+    decision = _decide_kind(entry, kind, context)
+    # Removing an entry at or above a mount point would empty the mounted tree.
+    if (
+        decision is not None
+        and decision.verdict is Verdict.REMOVE
+        and context.mounts.at_or_above(entry.location)
     ):
         return Decision(kind, Verdict.KEEP, "at or above a mount point")
+    return decision
 
+
+def _decide_kind(entry: Entry, kind: Kind, context: Context) -> Decision | None:
+    path = entry.path
     name = entry.name
     build_minutes = context.settings.build_litter_minutes
     match kind:

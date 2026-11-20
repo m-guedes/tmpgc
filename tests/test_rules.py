@@ -5,6 +5,8 @@ from dataclasses import replace
 
 from tmpgc.config import Settings
 from tmpgc.entries import Tree
+from tmpgc.mounts import Mounts
+from tmpgc.paths import location
 from tmpgc.processes import Process, Processes
 from tmpgc.rules import Context, Decision, Kind, Origin, Verdict, classify, decide
 
@@ -38,7 +40,7 @@ class RuleTests(SyntheticEntryTestCase):
             uid=self.uid,
             tree=self.trees.get,
             empty_dir=self._empty_dir,
-            mount_points=frozenset(),
+            mounts=Mounts(()),
         )
 
     def _set_holders(self, *holders: Process) -> None:
@@ -240,7 +242,7 @@ class RuleTests(SyntheticEntryTestCase):
 
     def test_keeps_mount_point_and_its_ancestor(self) -> None:
         self.context = replace(
-            self.context, mount_points=frozenset({"/tmp/scratch-mounted/nested"})
+            self.context, mounts=Mounts((location("/tmp/scratch-mounted/nested"),))
         )
         for name in ("scratch-mounted", "scratch-mounted/nested"):
             with self.subTest(name=name):
@@ -248,6 +250,12 @@ class RuleTests(SyntheticEntryTestCase):
                     self._decision(name, stat.S_IFDIR, origin=Origin.SCRATCH_PATTERN),
                     Decision(Kind.SCRATCH, Verdict.KEEP, "at or above a mount point"),
                 )
+        with self.subTest(kind=Kind.LARGE):
+            self.assertIsNone(
+                self._decision(
+                    "scratch-mounted", stat.S_IFDIR, origin=Origin.TEMPORARY_ROOT
+                )
+            )
         self.assertEqual(
             self._decision(
                 "scratch-mount", stat.S_IFDIR, origin=Origin.SCRATCH_PATTERN

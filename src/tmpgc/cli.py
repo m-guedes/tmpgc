@@ -6,7 +6,7 @@ import sys
 import time
 from typing import Never, override
 
-from . import config, entries, processes, sweep
+from . import config, entries, mounts, processes, sweep
 from .rules import Context
 
 
@@ -75,6 +75,6 @@ def main() -> int:
         processes=observed,
         tree=lambda path: entries.measure(path, observed.held),
         empty_dir=entries.empty_dir,
-        mount_points=entries.mount_points(),
+        mounts=mounts.read(),
     )
     return sweep.run(context, dry_run=options.dry_run, verbose=options.verbose)

@@ -5,7 +5,8 @@ from collections.abc import Iterator
 from unittest.mock import patch
 
 from tmpgc.config import Settings
-from tmpgc.entries import Entry, normalize_path
+from tmpgc.entries import Entry
+from tmpgc.mounts import Mounts
 from tmpgc.processes import Processes
 from tmpgc.rules import Context, Kind
 from tmpgc.selection import candidates
@@ -47,7 +48,7 @@ class CandidateTests(SyntheticEntryTestCase):
             uid=self.uid,
             tree=lambda _: None,
             empty_dir=lambda path: path == sdk_named_root,
-            mount_points=frozenset(),
+            mounts=Mounts(()),
         )
 
         def scan(path: str, depth: int | None) -> Iterator[Entry]:
@@ -66,8 +67,7 @@ class CandidateTests(SyntheticEntryTestCase):
             patch("tmpgc.selection.expand", return_value=iter((scratch,))),
         ):
             selected = [
-                (normalize_path(entry.path), kind)
-                for entry, kind in candidates(context)
+                (str(entry.location), kind) for entry, kind in candidates(context)
             ]
 
         self.assertEqual(
