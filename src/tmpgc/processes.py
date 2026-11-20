@@ -3,6 +3,7 @@
 import errno
 import os
 from collections.abc import Iterator, Mapping
+from collections.abc import Set as AbstractSet
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,38 +75,45 @@ def _process_holders(process: Path) -> Iterator[tuple[int, Process]]:
         yield pid, holder
 
 
-def _bound_sockets(process: Path, namespaces: set[str]) -> Iterator[str]:
+def _bound_sockets(
+    process: Path, namespaces: AbstractSet[str]
+) -> tuple[str, set[str]] | None:
     try:
         namespace = os.readlink(process / "ns/net")
         if namespace in namespaces:
-            return
+            return None
         # The table is relative to the process's network namespace (Linux man-pages,
         # proc_pid_net(5), 2025). Retry with another member if the first vanishes.
         table = (process / "net/unix").read_bytes()
     except _PROCESS_ERRORS:
-        return
+        return None
 
-    namespaces.add(namespace)
+    paths: set[str] = set()
     for line in table.split(b"\n"):
         fields = line.split(maxsplit=7)
         if len(fields) == 8 and fields[7].startswith(b"/"):
-            yield os.fsdecode(fields[7])
+            paths.add(os.fsdecode(fields[7]))
+    return namespace, paths
+
+
+def _link_id(link: str | Path) -> FileId | None:
+    try:
+        return file_id(os.stat(link))
+    except _PROCESS_ERRORS:
+        return None
+    except OSError as error:
+        if error.errno == errno.ESTALE:
+            return None
+        raise
 
 
 def _held(process: Path) -> Iterator[FileId]:
-    def link_id(link: str | Path) -> Iterator[FileId]:
-        try:
-            yield file_id(os.stat(link))
-        except _PROCESS_ERRORS:
-            return
-        except OSError as error:
-            if error.errno != errno.ESTALE:
-                raise
-
-    yield from link_id(process / "cwd")
+    if (identity := _link_id(process / "cwd")) is not None:
+        yield identity
     with suppress(*_PROCESS_ERRORS), os.scandir(process / "fd") as descriptors:
         for descriptor in descriptors:
-            yield from link_id(descriptor.path)
+            if (identity := _link_id(descriptor.path)) is not None:
+                yield identity
 
     try:
         with (process / "maps").open("rb") as maps:
@@ -137,7 +145,10 @@ def observe() -> Processes:
         if process.name.isdecimal():
             for pid, holder in _process_holders(process):
                 holders.setdefault(pid, []).append(holder)
-            sockets.update(_bound_sockets(process, namespaces))
+            if (bound := _bound_sockets(process, namespaces)) is not None:
+                namespace, paths = bound
+                namespaces.add(namespace)
+                sockets.update(paths)
             held.update(_held(process))
     return Processes(
         {pid: tuple(processes) for pid, processes in holders.items()},
