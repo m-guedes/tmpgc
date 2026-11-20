@@ -1,4 +1,4 @@
-"""Parse command options and configuration."""
+"""Parse options, assemble the run context and start the sweep."""
 
 import argparse
 import os
