@@ -79,6 +79,41 @@ label = "scratch"
 paths = ["/tmp/claude-%U/*/*", "/tmp/*/claude-%U/*/*"]
 idle = "3d"
 
+# Unity Editor compiler pre-warm tests carry the editor's PID.
+[[rule]]
+label = "Unity VBCS prewarm"
+under = ["/tmp"]
+depth = 1
+type = "file"
+name = 'UnityVBCSPreWarm_(?P<pid>[0-9]+)\.(?:cs|rsp|dll|ref\.dll|pdb)'
+idle = "3d"
+
+# Mono crash-handler debugger scripts carry the crashed process's PID.
+[[rule]]
+label = "Mono debugger commands"
+under = ["/tmp"]
+depth = 1
+type = "file"
+name = 'mono-gdb-commands\.(?P<pid>[0-9]+)'
+idle = "7d"
+
+# Emacs native-compilation worker scripts, read once when the worker starts.
+[[rule]]
+label = "Emacs compile script"
+under = ["/tmp"]
+depth = 1
+type = "file"
+name = 'emacs-async-comp-.+-[A-Za-z0-9]{6}\.el'
+idle = "1d"
+
+# Per-version Node.js compile caches for this UID, recreated on demand.
+[[rule]]
+label = "Node compile cache version"
+paths = ["/tmp/node-compile-cache/v*-%U"]
+type = "directory"
+name = 'v[0-9]+\.[0-9]+\.[0-9]+-[a-z0-9_]+-[0-9a-f]{8}-[0-9]+'
+idle = "7d"
+
 # Reclaim idle entries with at least 100 MiB of allocated space.
 [[rule]]
 label = "large entry"
