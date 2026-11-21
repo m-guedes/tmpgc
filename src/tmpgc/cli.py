@@ -25,9 +25,7 @@ class _Options(argparse.Namespace):
 
 def main() -> int:
     path = config.config_path()
-    parser = _Parser(
-        prog="tmpgc", epilog=f"Settings are read from {path} if it exists."
-    )
+    parser = _Parser(prog="tmpgc", epilog=f"The configuration file {path} is required.")
     parser.add_argument(
         "-n", dest="dry_run", action="store_true", help="show what would be removed"
     )
