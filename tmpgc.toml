@@ -1,0 +1,96 @@
+# Rules apply in order: an entry belongs to the first rule that matches it.
+
+# .NET diagnostic sockets encode a PID and process start ticks.
+[[rule]]
+label = "dotnet diagnostic socket"
+under = ["/tmp"]
+depth = 2
+type = "socket"
+name = 'dotnet-diagnostic-(?P<pid>[0-9]+)-(?P<start>[0-9]+)-socket'
+idle = "0"
+
+# MSBuild sockets encode only a PID.
+[[rule]]
+label = "MSBuild socket"
+under = ["/tmp"]
+depth = 2
+type = "socket"
+name = 'MSBuild(?P<pid>[0-9]+)'
+idle = "0"
+
+# Other sockets rely on the bound-socket check.
+[[rule]]
+label = "socket"
+under = ["/tmp"]
+depth = 2
+type = "socket"
+idle = "0"
+
+# CLR debugger pipes encode a PID and process start ticks.
+[[rule]]
+label = "clr-debug-pipe"
+under = ["/tmp"]
+depth = 2
+type = "fifo"
+name = 'clr-debug-pipe-(?P<pid>[0-9]+)-(?P<start>[0-9]+)-(?:in|out)'
+idle = "0"
+
+# Numbered MSBuild working directories encode a PID.
+[[rule]]
+label = "MSBuild dir"
+under = ["/tmp"]
+depth = 2
+type = "directory"
+name = 'MSBuild(?P<pid>[0-9]+)'
+idle = "0"
+
+# Discard idle MSBuild temporary directories.
+[[rule]]
+label = "MSBuildTemp"
+under = ["/tmp"]
+depth = 2
+type = "directory"
+name = 'MSBuildTemp.*'
+idle = "60min"
+
+# Discard empty NuGet case-sensitivity probes.
+[[rule]]
+label = "NuGet probe"
+under = ["/tmp"]
+depth = 1
+type = "file"
+name = 'CASESENSITIVETEST.*'
+empty = true
+idle = "60min"
+
+# Discard empty six-character .NET temporary directories.
+[[rule]]
+label = "empty .NET temp dir"
+under = ["/tmp"]
+depth = 1
+type = "directory"
+name = '[A-Za-z0-9]{6}'
+empty = true
+idle = "1d"
+
+# Discard idle Claude Code scratch entries for this UID.
+[[rule]]
+label = "scratch"
+paths = ["/tmp/claude-%U/*/*", "/tmp/*/claude-%U/*/*"]
+idle = "3d"
+
+# Reclaim idle entries with at least 100 MiB of allocated space.
+[[rule]]
+label = "large entry"
+under = ["/tmp"]
+depth = 1
+min_size = "100M"
+idle = "1d"
+
+# Discard idle regular files in shared memory.
+[[rule]]
+label = "segment"
+under = ["/dev/shm"]
+depth = 1
+type = "file"
+idle = "1d"
