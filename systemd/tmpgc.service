@@ -1,5 +1,5 @@
 [Unit]
-Description=Remove stale entries from /tmp and /dev/shm
+Description=Remove stale temporary entries
 
 [Service]
 Type=oneshot
