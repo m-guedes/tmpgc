@@ -31,16 +31,20 @@ lint: (_check-config default_config)
 test:
     uv run python -m unittest discover -s tests -t .
 
-# Install the default configuration if its destination is free.
-config:
+# Install the default configuration. Use -f to replace an existing file.
+config flag="":
     #!/usr/bin/env bash
-    uv run python - {{ quote(default_config) }} <<'PY'
+    uv run python - {{ quote(default_config) }} "$1" <<'PY'
     import os
     import sys
     from pathlib import Path
     from tempfile import TemporaryDirectory
 
     from tmpgc.config import config_path
+
+    flag = sys.argv[2]
+    if flag not in ("", "-f"):
+        sys.exit("usage: just config [-f]")
 
     path = config_path()
     try:
@@ -50,9 +54,13 @@ config:
             staged = Path(directory) / path.name
             staged.write_bytes(data)
             staged.chmod(0o600)
-            # Publish the complete file without replacing an existing name
-            # (Linux man-pages, link(2), 2026).
-            os.link(staged, path)
+            if flag == "-f":
+                # Replace the destination atomically (Linux man-pages, rename(2), 2026).
+                os.replace(staged, path)
+            else:
+                # Publish the complete file without replacing an existing name
+                # (Linux man-pages, link(2), 2026).
+                os.link(staged, path)
     except OSError as error:
         sys.exit(str(error))
     PY
