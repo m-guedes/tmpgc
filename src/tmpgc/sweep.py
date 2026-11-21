@@ -34,7 +34,7 @@ def run(context: Context, *, dry_run: bool, verbose: bool) -> int:
         report.removing(entry.path, decision)
         if not dry_run:
             try:
-                remove(entry)
+                remove(entry, only_if_empty=rule.empty)
             except RemovalError as error:
                 report.failed(entry.path, decision, error)
                 continue

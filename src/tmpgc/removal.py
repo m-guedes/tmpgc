@@ -31,7 +31,7 @@ def _remove_tree(name: str, parent_fd: int) -> None:
         raise RemovalError(f"{path}: {cause}") from error
 
 
-def remove(entry: Entry) -> None:
+def remove(entry: Entry, *, only_if_empty: bool) -> None:
     try:
         with parent_directory(entry.path) as (fd, name):
             # rm -rf refuses dot entries and the filesystem root.
@@ -41,8 +41,16 @@ def remove(entry: Entry) -> None:
             if not os.path.samestat(entry.info, current):
                 raise RemovalError("entry changed since scan")
             if stat.S_ISDIR(current.st_mode):
-                _remove_tree(name, fd)
+                if only_if_empty:
+                    # rmdir protects entries created after the scan, as in
+                    # systemd-tmpfiles (systemd project, tmpfiles.c, 2026).
+                    os.rmdir(name, dir_fd=fd)
+                else:
+                    _remove_tree(name, fd)
             else:
+                # A writer can still change the length between this check and unlink.
+                if only_if_empty and current.st_size:
+                    raise RemovalError("entry changed since scan")
                 os.unlink(name, dir_fd=fd)
     except FileNotFoundError:
         return
