@@ -24,6 +24,11 @@ class Mounts:
     def at_or_above(self, path: PurePosixPath) -> bool:
         return path in self._enclosing
 
+    def containing(self, path: PurePosixPath) -> PurePosixPath | None:
+        return next(
+            (point for point in (path, *path.parents) if self.is_mount(point)), None
+        )
+
 
 def read() -> Mounts:
     points: set[PurePosixPath] = set()

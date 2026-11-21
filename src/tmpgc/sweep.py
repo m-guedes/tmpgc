@@ -1,15 +1,30 @@
 """Apply cleanup decisions to selected entries."""
 
+from collections.abc import Iterator
+
+from .config import Patterns, Rule, Search
+from .entries import fixed_prefix
+from .paths import location
 from .removal import RemovalError, remove
 from .report import Report
 from .rules import Context, Verdict, decide
 from .selection import candidates
 
 
+def _search_prefixes(rules: tuple[Rule, ...]) -> Iterator[str]:
+    for rule in rules:
+        match rule.select:
+            case Patterns(globs):
+                for pattern in globs:
+                    yield fixed_prefix(pattern)
+            case Search(roots):
+                yield from roots
+
+
 def run(context: Context, *, dry_run: bool, verbose: bool) -> int:
     report = Report(dry_run=dry_run, verbose=verbose)
-    for entry, kind in candidates(context):
-        decision = decide(entry, kind, context)
+    for entry, rule in candidates(context):
+        decision = decide(entry, rule, context)
         if decision is None:
             continue
         if decision.verdict is Verdict.KEEP:
@@ -25,5 +40,10 @@ def run(context: Context, *, dry_run: bool, verbose: bool) -> int:
                 continue
         report.removed(decision)
 
-    report.summary((context.settings.scan_root, context.settings.shared_memory_root))
+    filesystems = dict.fromkeys(
+        str(point)
+        for prefix in _search_prefixes(context.rules)
+        if (point := context.mounts.containing(location(prefix))) is not None
+    )
+    report.summary(filesystems)
     return report.exit_status()

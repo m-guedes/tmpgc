@@ -1,41 +1,23 @@
-"""Classify temporary entries and decide which ones to remove."""
+"""Match configured rules and decide which entries to remove."""
 
-import re
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum, auto
 
-from .config import Settings
+from .config import EntryType, Rule
 from .entries import Entry, Tree
 from .mounts import Mounts
 from .processes import Processes
 
 
-_DEBUGGER_PIPE = re.compile(r"clr-debug-pipe-([0-9]+)-([0-9]+)-(?:in|out)")
-_DIAGNOSTIC_SOCKET = re.compile(r"dotnet-diagnostic-([0-9]+)-([0-9]+)-socket")
-_MSBUILD_OWNER = re.compile(r"MSBuild([0-9]+)")
-_SDK_DIRECTORY = re.compile(r"[A-Za-z0-9]{6}")
-
-
-class Origin(Enum):
-    PRIMARY_SCAN = auto()
-    TEMPORARY_ROOT = auto()
-    SCRATCH_PATTERN = auto()
-    SHARED_MEMORY = auto()
-
-
-class Kind(Enum):
-    SOCKET = auto()
-    DEBUGGER_PIPE = auto()
-    MSBUILD_DIRECTORY = auto()
-    MSBUILD_TEMP_DIRECTORY = auto()
-    NUGET_PROBE = auto()
-    EMPTY_SDK_DIRECTORY = auto()
-    SCRATCH = auto()
-    LARGE = auto()
-    SEGMENT = auto()
+_ENTRY_MODES = {
+    EntryType.SOCKET: stat.S_IFSOCK,
+    EntryType.FIFO: stat.S_IFIFO,
+    EntryType.DIRECTORY: stat.S_IFDIR,
+    EntryType.FILE: stat.S_IFREG,
+}
 
 
 class Verdict(Enum):
@@ -45,15 +27,14 @@ class Verdict(Enum):
 
 @dataclass(frozen=True, slots=True)
 class Decision:
-    kind: Kind
     verdict: Verdict
     reason: str
-    allocated_kib: int | None = None
+    freed_kib: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class Context:
-    settings: Settings
+    rules: tuple[Rule, ...]
     processes: Processes
     now_ns: int
     uid: int
@@ -62,167 +43,85 @@ class Context:
     mounts: Mounts
 
 
-@dataclass(frozen=True, slots=True)
-class _Owner:
-    pid: int
-    start_ticks: int | None
+def matches(entry: Entry, rule: Rule, context: Context) -> bool:
+    if entry.info.st_uid != context.uid:
+        return False
+    mode = stat.S_IFMT(entry.info.st_mode)
+    if rule.type is not None and mode != _ENTRY_MODES[rule.type]:
+        return False
+    if rule.name is not None and rule.name.fullmatch(entry.name) is None:
+        return False
+    if rule.empty:
+        if mode == stat.S_IFDIR:
+            if not context.empty_dir(entry.path):
+                return False
+        elif mode != stat.S_IFREG or entry.info.st_size != 0:
+            return False
+    if rule.min_size == 0:
+        return True
+    tree = context.tree(entry.path)
+    return tree is not None and tree.allocated_bytes >= rule.min_size
 
 
-def classify(entry: Entry, origin: Origin, context: Context) -> Kind | None:
-    mode = entry.info.st_mode
-    name = entry.name
-    match origin:
-        case Origin.PRIMARY_SCAN:
-            if stat.S_ISSOCK(mode):
-                return Kind.SOCKET
-            if stat.S_ISFIFO(mode) and _DEBUGGER_PIPE.fullmatch(name):
-                return Kind.DEBUGGER_PIPE
-            if stat.S_ISDIR(mode) and name.startswith("MSBuild"):
-                return (
-                    Kind.MSBUILD_TEMP_DIRECTORY
-                    if name.startswith("MSBuildTemp")
-                    else Kind.MSBUILD_DIRECTORY
-                )
-            return None
-
-        case Origin.TEMPORARY_ROOT:
-            if entry.info.st_uid != context.uid:
-                return None
-            if (
-                stat.S_ISREG(mode)
-                and name.startswith("CASESENSITIVETEST")
-                and entry.info.st_size == 0
-            ):
-                return Kind.NUGET_PROBE
-            if (
-                stat.S_ISDIR(mode)
-                and _SDK_DIRECTORY.fullmatch(name)
-                and context.empty_dir(entry.path)
-            ):
-                return Kind.EMPTY_SDK_DIRECTORY
-            return Kind.LARGE
-
-        case Origin.SCRATCH_PATTERN:
-            return Kind.SCRATCH if entry.info.st_uid == context.uid else None
-
-        case Origin.SHARED_MEMORY:
-            return (
-                Kind.SEGMENT
-                if stat.S_ISREG(mode) and entry.info.st_uid == context.uid
-                else None
-            )
+def _owner_reason(entry: Entry, rule: Rule, context: Context) -> str | None:
+    if rule.name is None or "pid" not in rule.name.groupindex:
+        return None
+    match = rule.name.fullmatch(entry.name)
+    if match is None or (pid_text := match["pid"]) is None:
+        return None
+    if not pid_text.isascii() or not pid_text.isdecimal():
+        return "owner not a PID"
+    pid = int(pid_text)
+    start = match.groupdict().get("start")
+    if start is None:
+        live = context.processes.started_no_later_than(
+            pid, context.uid, entry.info.st_mtime_ns
+        )
+    else:
+        if not start.isascii() or not start.isdecimal():
+            return "owner start not decimal"
+        live = context.processes.started_at(pid, int(start))
+    return f"pid {pid} alive" if live else None
 
 
-def _owner(name: str) -> _Owner | None:
-    match = _DEBUGGER_PIPE.fullmatch(name) or _DIAGNOSTIC_SOCKET.fullmatch(name)
-    if match is not None:
-        return _Owner(int(match[1]), int(match[2]))
-    if (match := _MSBUILD_OWNER.fullmatch(name)) is not None:
-        return _Owner(int(match[1]), None)
-    return None
-
-
-def _owner_live(owner: _Owner, entry: Entry, context: Context) -> bool:
-    if owner.start_ticks is not None:
-        return context.processes.started_at(owner.pid, owner.start_ticks)
-    return context.processes.started_no_later_than(
-        owner.pid, context.uid, entry.info.st_mtime_ns
-    )
+def _nanoseconds(span: timedelta) -> int:
+    return (span // timedelta(microseconds=1)) * 1000
 
 
 def _span(threshold: timedelta) -> str:
-    if not threshold % timedelta(days=1):
-        return f"{threshold.days}d"
-    return f"{threshold // timedelta(minutes=1)}m"
+    for unit, suffix in (
+        (timedelta(days=1), "d"),
+        (timedelta(hours=1), "h"),
+        (timedelta(minutes=1), "min"),
+    ):
+        if not threshold % unit:
+            return f"{threshold // unit}{suffix}"
+    return f"{threshold // timedelta(seconds=1)}s"
 
 
-def _idle(
-    kind: Kind, tree: Tree, threshold: timedelta, label: str, context: Context
-) -> Decision:
-    threshold_ns = (threshold // timedelta(microseconds=1)) * 1000
-    span = _span(threshold)
-    if context.now_ns - tree.last_activity_ns <= threshold_ns:
-        return Decision(kind, Verdict.KEEP, f"{label} touched within {span}")
-    return Decision(kind, Verdict.REMOVE, f"{label} idle >{span}", tree.allocated_kib)
-
-
-def _idle_unused(
-    kind: Kind, tree: Tree, threshold: timedelta, label: str, context: Context
-) -> Decision:
-    decision = _idle(kind, tree, threshold, label, context)
-    if decision.verdict is Verdict.REMOVE and tree.in_use:
-        return Decision(kind, Verdict.KEEP, f"{label} held by a live process")
-    return decision
-
-
-def decide(entry: Entry, kind: Kind, context: Context) -> Decision | None:
-    decision = _decide_kind(entry, kind, context)
+def decide(entry: Entry, rule: Rule, context: Context) -> Decision | None:
+    label = rule.label
     # Removing an entry at or above a mount point would empty the mounted tree.
+    if context.mounts.at_or_above(entry.location):
+        return Decision(Verdict.KEEP, f"{label} at or above a mount point")
     if (
-        decision is not None
-        and decision.verdict is Verdict.REMOVE
-        and context.mounts.at_or_above(entry.location)
+        stat.S_ISSOCK(entry.info.st_mode)
+        and entry.path in context.processes.bound_sockets
     ):
-        return Decision(kind, Verdict.KEEP, "at or above a mount point")
-    return decision
-
-
-def _decide_kind(entry: Entry, kind: Kind, context: Context) -> Decision | None:
-    path = entry.path
-    name = entry.name
-    settings = context.settings
-    match kind:
-        case Kind.SOCKET:
-            if path in context.processes.bound_sockets:
-                return Decision(kind, Verdict.KEEP, "active socket")
-            owner = _owner(name)
-            if owner is not None and _owner_live(owner, entry, context):
-                return Decision(kind, Verdict.KEEP, "active socket")
-            return Decision(kind, Verdict.REMOVE, "stale socket")
-
-        case Kind.DEBUGGER_PIPE:
-            owner = _owner(name)
-            if owner is not None and _owner_live(owner, entry, context):
-                return Decision(kind, Verdict.KEEP, f"pid {owner.pid} alive")
-            return Decision(kind, Verdict.REMOVE, "stale clr-debug-pipe")
-
-        case Kind.MSBUILD_DIRECTORY:
-            owner = _owner(name)
-            if owner is None:
-                return Decision(kind, Verdict.KEEP, "MSBuild dir without PID")
-            if _owner_live(owner, entry, context):
-                return Decision(kind, Verdict.KEEP, f"pid {owner.pid} alive")
-            tree = context.tree(path)
-            if tree is None:
-                return None
-            return Decision(
-                kind, Verdict.REMOVE, "stale MSBuild dir", tree.allocated_kib
-            )
-
-        case Kind.MSBUILD_TEMP_DIRECTORY:
-            rule, threshold, label = _idle, settings.build_litter_idle, "MSBuildTemp"
-        case Kind.NUGET_PROBE:
-            rule, threshold, label = _idle, settings.build_litter_idle, "NuGet probe"
-        case Kind.EMPTY_SDK_DIRECTORY:
-            rule, threshold, label = (
-                _idle,
-                settings.empty_directory_idle,
-                "empty .NET temp dir",
-            )
-        case Kind.SCRATCH:
-            rule, threshold, label = _idle_unused, settings.scratch_idle, "scratch"
-        case Kind.LARGE:
-            rule, threshold, label = (
-                _idle_unused,
-                settings.large_entry_idle,
-                "large entry",
-            )
-        case Kind.SEGMENT:
-            rule, threshold, label = _idle_unused, settings.segment_idle, "segment"
-
-    tree = context.tree(path)
-    if tree is None or (
-        kind is Kind.LARGE and tree.allocated_kib < settings.large_entry_mib * 1024
-    ):
+        return Decision(Verdict.KEEP, f"{label} bound")
+    if (reason := _owner_reason(entry, rule, context)) is not None:
+        return Decision(Verdict.KEEP, f"{label} {reason}")
+    tree = context.tree(entry.path)
+    if tree is None:
         return None
-    return rule(kind, tree, threshold, label, context)
+    idle_ns = context.now_ns - tree.last_activity_ns
+    if idle_ns <= _nanoseconds(rule.idle):
+        return Decision(Verdict.KEEP, f"{label} touched within {_span(rule.idle)}")
+    if tree.in_use and (
+        rule.held_idle is None or idle_ns <= _nanoseconds(rule.held_idle)
+    ):
+        return Decision(Verdict.KEEP, f"{label} held by a live process")
+    reason = f"{label} idle >{_span(rule.idle)}" if rule.idle else f"stale {label}"
+    # An unlinked file keeps its allocation while it is held
+    # (Linux man-pages, unlink(2), 2026).
+    return Decision(Verdict.REMOVE, reason, tree.allocated_kib - tree.held_kib)

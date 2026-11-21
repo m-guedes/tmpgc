@@ -7,6 +7,7 @@ from collections.abc import Set as AbstractSet
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
+from itertools import takewhile
 from pathlib import PurePosixPath
 
 from .mounts import Mounts
@@ -36,9 +37,15 @@ class Entry:
 
 @dataclass(frozen=True, slots=True)
 class Tree:
-    allocated_kib: int
+    allocated_bytes: int
     last_activity_ns: int
     in_use: bool
+    held_kib: int
+
+    @property
+    def allocated_kib(self) -> int:
+        # du -sk rounds the tree's allocation up to KiB.
+        return (self.allocated_bytes + 1023) // 1024
 
 
 def file_id(info: os.stat_result) -> FileId:
@@ -138,8 +145,17 @@ def walk(root: str, depth: int | None, mounts: Mounts) -> Iterator[Entry]:
                 scan.close()
 
 
+def _has_glob(component: str) -> bool:
+    return any(character in component for character in "*?[")
+
+
+def fixed_prefix(pattern: str) -> str:
+    fixed = takewhile(lambda component: not _has_glob(component), pattern.split("/"))
+    return "/".join(fixed) or "/"
+
+
 def _matches(directory: str, component: str) -> Iterator[Entry]:
-    if not any(character in component for character in "*?["):
+    if not _has_glob(component):
         if (entry := entry_at(os.path.join(directory, component))) is not None:
             yield entry
         return
@@ -184,6 +200,7 @@ def empty_dir(path: str) -> bool:
 
 def measure(path: str, held: AbstractSet[FileId], mounts: Mounts) -> Tree | None:
     blocks = 0
+    held_blocks = 0
     last_activity_ns: int | None = None
     in_use = False
     linked: set[FileId] = set()
@@ -194,7 +211,8 @@ def measure(path: str, held: AbstractSet[FileId], mounts: Mounts) -> Tree | None
         info = entry.info
         identity = file_id(info)
         directory = stat.S_ISDIR(info.st_mode)
-        in_use = in_use or identity in held
+        held_entry = identity in held
+        in_use = in_use or held_entry
         activity_ns = max(info.st_mtime_ns, info.st_ctime_ns)
         # Directory listings advance atime, including listings by this scan.
         if not directory:
@@ -209,7 +227,10 @@ def measure(path: str, held: AbstractSet[FileId], mounts: Mounts) -> Tree | None
                 continue
             linked.add(identity)
         blocks += info.st_blocks
+        if held_entry:
+            held_blocks += info.st_blocks
     if last_activity_ns is None:
         return None
-    # Linux st_blocks counts 512-byte blocks. du -sk rounds the tree's sum to KiB.
-    return Tree((blocks + 1) // 2, last_activity_ns, in_use)
+    # Use exact bytes for size rules. Linux st_blocks counts 512-byte blocks
+    # (Linux man-pages, stat(3type), 2026).
+    return Tree(blocks * 512, last_activity_ns, in_use, (held_blocks + 1) // 2)

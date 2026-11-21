@@ -36,9 +36,9 @@ def used_kib(root: str) -> int:
 
 
 def _removal_reason(decision: Decision) -> str:
-    if decision.allocated_kib is None:
+    if decision.freed_kib == 0:
         return decision.reason
-    return f"{decision.reason}, {_format_size(decision.allocated_kib)}"
+    return f"{decision.reason}, {_format_size(decision.freed_kib)}"
 
 
 @dataclass(slots=True, kw_only=True)
@@ -62,7 +62,7 @@ class Report:
 
     def removed(self, decision: Decision) -> None:
         self._removed += 1
-        self._freed_kib += decision.allocated_kib or 0
+        self._freed_kib += decision.freed_kib
 
     def failed(self, path: str, decision: Decision, cause: RemovalError) -> None:
         self._failed += 1
@@ -73,15 +73,16 @@ class Report:
         held = ", ".join(
             f"{root} holds {_format_size(used_kib(root))}" for root in roots
         )
+        usage = f" {held}." if held else ""
         if self.dry_run:
             print(
                 f"Dry run: {self._removed} items would be removed ({size} to free), "
-                f"{self._kept} active items kept. {held}."
+                f"{self._kept} active items kept.{usage}"
             )
         else:
             print(
                 f"Done: {self._removed} items removed ({size} freed), "
-                f"{self._kept} active items kept, {self._failed} failed. {held}."
+                f"{self._kept} active items kept, {self._failed} failed.{usage}"
             )
 
     def exit_status(self) -> int:

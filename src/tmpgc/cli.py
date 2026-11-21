@@ -4,8 +4,7 @@ import argparse
 import os
 import sys
 import time
-from dataclasses import replace
-from datetime import timedelta
+from functools import cache
 from typing import Never, override
 
 from . import config, entries, mounts, processes, sweep
@@ -22,15 +21,6 @@ class _Parser(argparse.ArgumentParser):
 class _Options(argparse.Namespace):
     dry_run: bool
     verbose: bool
-    depth: int
-    scratch_days: int
-
-
-def _nonnegative_integer(value: str) -> int:
-    digits = value.removeprefix("+")
-    if digits.isascii() and digits.isdecimal():
-        return int(digits)
-    raise argparse.ArgumentTypeError("expected a non-negative integer")
 
 
 def main() -> int:
@@ -44,43 +34,26 @@ def main() -> int:
     parser.add_argument(
         "-v", dest="verbose", action="store_true", help="show kept entries and removals"
     )
-    parser.add_argument(
-        "-d",
-        dest="depth",
-        metavar="depth",
-        type=_nonnegative_integer,
-        default=config.DEFAULT_DEPTH,
-        help="maximum directory search depth (default: %(default)s)",
-    )
-    parser.add_argument(
-        "-s",
-        dest="scratch_days",
-        metavar="days",
-        type=_nonnegative_integer,
-        default=config.DEFAULT_SCRATCH_DAYS,
-        help="idle days before scratch removal (default: %(default)s)",
-    )
     options = parser.parse_args(namespace=_Options())
-    if options.scratch_days > timedelta.max.days:
-        parser.error(f"-s accepts at most {timedelta.max.days} days")
     uid = os.getuid()
     try:
-        settings = config.load(path, uid)
+        rules = config.load(path, uid)
     except config.ConfigError as error:
         parser.error(str(error))
     now_ns = time.time_ns()
     observed = processes.observe()
     mount_table = mounts.read()
+
+    @cache
+    def tree(path: str) -> entries.Tree | None:
+        return entries.measure(path, observed.held, mount_table)
+
     context = Context(
-        settings=replace(
-            settings,
-            depth=options.depth,
-            scratch_idle=timedelta(days=options.scratch_days),
-        ),
+        rules=rules,
         now_ns=now_ns,
         uid=uid,
         processes=observed,
-        tree=lambda path: entries.measure(path, observed.held, mount_table),
+        tree=tree,
         empty_dir=entries.empty_dir,
         mounts=mount_table,
     )
