@@ -63,6 +63,14 @@ name = 'CASESENSITIVETEST.*'
 empty = true
 idle = "60min"
 
+# Discard empty .NET SDK advertising-manifest directories. Their parents then match the next rule.
+[[rule]]
+label = ".NET SDK advertising dir"
+paths = ["/tmp/*/dotnet-sdk-advertising-temp"]
+type = "directory"
+empty = true
+idle = "1d"
+
 # Discard empty six-character .NET temporary directories.
 [[rule]]
 label = "empty .NET temp dir"
