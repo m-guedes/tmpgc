@@ -11,6 +11,10 @@ from . import config, entries, mounts, processes, sweep
 from .rules import Context
 
 
+# Python's time module does not export this Linux clock ID (linux/time.h).
+_CLOCK_REALTIME_COARSE = 5
+
+
 class _Parser(argparse.ArgumentParser):
     @override
     def error(self, message: str) -> Never:
@@ -38,7 +42,10 @@ def main() -> int:
         rules = config.load(path, uid)
     except config.ConfigError as error:
         parser.error(str(error))
-    now_ns = time.time_ns()
+    # Linux stamps inodes with coarse time, updated every jiffy (Linux kernel
+    # documentation, multigrain-ts.rst, 2026). A finer clock can run ahead of an entry
+    # created after it was read and make that entry look idle.
+    now_ns = time.clock_gettime_ns(_CLOCK_REALTIME_COARSE)
     observed = processes.observe()
     mount_table = mounts.read()
 
