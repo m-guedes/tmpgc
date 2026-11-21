@@ -5,6 +5,7 @@ import shutil
 import stat
 
 from .entries import Entry, parent_directory
+from .rules import Scope
 
 
 class RemovalError(Exception):
@@ -31,7 +32,7 @@ def _remove_tree(name: str, parent_fd: int) -> None:
         raise RemovalError(f"{path}: {cause}") from error
 
 
-def remove(entry: Entry, *, only_if_empty: bool) -> None:
+def remove(entry: Entry, scope: Scope) -> None:
     try:
         with parent_directory(entry.path) as (fd, name):
             # rm -rf refuses dot entries and the filesystem root.
@@ -41,7 +42,7 @@ def remove(entry: Entry, *, only_if_empty: bool) -> None:
             if not os.path.samestat(entry.info, current):
                 raise RemovalError("entry changed since scan")
             if stat.S_ISDIR(current.st_mode):
-                if only_if_empty:
+                if scope is Scope.EMPTY:
                     # rmdir protects entries created after the scan, as in
                     # systemd-tmpfiles (systemd project, tmpfiles.c, 2026).
                     os.rmdir(name, dir_fd=fd)
@@ -49,7 +50,7 @@ def remove(entry: Entry, *, only_if_empty: bool) -> None:
                     _remove_tree(name, fd)
             else:
                 # A writer can still change the length between this check and unlink.
-                if only_if_empty and current.st_size:
+                if scope is Scope.EMPTY and current.st_size:
                     raise RemovalError("entry changed since scan")
                 os.unlink(name, dir_fd=fd)
     except FileNotFoundError:

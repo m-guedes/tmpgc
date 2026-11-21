@@ -25,11 +25,19 @@ class Verdict(Enum):
     KEEP = auto()
 
 
+class Scope(Enum):
+    # The entry and everything beneath it.
+    TREE = auto()
+    # The entry only while it holds no directory entries or file bytes.
+    EMPTY = auto()
+
+
 @dataclass(frozen=True, slots=True)
 class Decision:
     verdict: Verdict
     reason: str
     freed_kib: int = 0
+    scope: Scope = Scope.TREE
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +130,8 @@ def decide(entry: Entry, rule: Rule, context: Context) -> Decision | None:
     ):
         return Decision(Verdict.KEEP, f"{label} held by a live process")
     reason = f"{label} idle >{_span(rule.idle)}" if rule.idle else f"stale {label}"
+    # Removal must not destroy content that an empty-only rule never judged.
+    scope = Scope.EMPTY if rule.empty else Scope.TREE
     # An unlinked file keeps its allocation while it is held
     # (Linux man-pages, unlink(2), 2026).
-    return Decision(Verdict.REMOVE, reason, tree.allocated_kib - tree.held_kib)
+    return Decision(Verdict.REMOVE, reason, tree.allocated_kib - tree.held_kib, scope)

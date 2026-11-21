@@ -2,6 +2,7 @@
 
 from tmpgc.entries import entry_at
 from tmpgc.removal import RemovalError, remove
+from tmpgc.rules import Scope
 
 from .filesystem_test_case import TreeTestCase
 
@@ -14,7 +15,7 @@ class RemovalTests(TreeTestCase):
                 entry = entry_at(f"{self.root}/{suffix}")
                 assert entry is not None
                 with self.assertRaises(RemovalError):
-                    remove(entry, only_if_empty=False)
+                    remove(entry, Scope.TREE)
                 self.assertTrue(self.file.is_file())
 
     def test_empty_only_keeps_content_added_after_scan(self) -> None:
@@ -32,5 +33,5 @@ class RemovalTests(TreeTestCase):
                 assert entry is not None
                 target.write_bytes(contents)
                 with self.assertRaises(RemovalError):
-                    remove(entry, only_if_empty=True)
+                    remove(entry, Scope.EMPTY)
                 self.assertEqual(target.read_bytes(), contents)

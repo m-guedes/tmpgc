@@ -9,7 +9,7 @@ from tmpgc.entries import Tree
 from tmpgc.mounts import Mounts
 from tmpgc.paths import location
 from tmpgc.processes import Process, Processes
-from tmpgc.rules import Context, Decision, Verdict, decide, matches
+from tmpgc.rules import Context, Decision, Scope, Verdict, decide, matches
 
 from .filesystem_test_case import SyntheticEntryTestCase
 
@@ -247,7 +247,9 @@ class RuleTests(SyntheticEntryTestCase):
             self._decision(
                 self.nuget, "CASESENSITIVETEST42", stat.S_IFREG, seconds_ago=3601
             ),
-            Decision(Verdict.REMOVE, "NuGet probe idle >1h", _ALLOCATED_KIB),
+            Decision(
+                Verdict.REMOVE, "NuGet probe idle >1h", _ALLOCATED_KIB, Scope.EMPTY
+            ),
         )
 
     def test_keeps_nuget_probe_at_age_limit(self) -> None:
@@ -261,7 +263,12 @@ class RuleTests(SyntheticEntryTestCase):
     def test_removes_old_empty_sdk_directory(self) -> None:
         self.assertEqual(
             self._decision(self.sdk, "AbCd42", stat.S_IFDIR),
-            Decision(Verdict.REMOVE, "empty .NET temp dir idle >1d", _ALLOCATED_KIB),
+            Decision(
+                Verdict.REMOVE,
+                "empty .NET temp dir idle >1d",
+                _ALLOCATED_KIB,
+                Scope.EMPTY,
+            ),
         )
 
     def test_keeps_nonempty_sdk_directory(self) -> None:
