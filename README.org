@@ -1,0 +1,108 @@
+#+TITLE: tmpgc
+#+DESCRIPTION: Install, configure and run tmpgc.
+
+tmpgc removes stale entries own by the running user under /tmp and /dev/shm. Rules in a configuration file select the entries. Entries a live process still uses stay. A systemd user timer runs it hourly.
+
+* Requirements
+
+Linux with a systemd user session, uv and just. uv provides Python 3.14.
+
+* Installation
+
+From a checkout:
+
+#+begin_src sh
+just config   # copy the default rules to ~/.config/tmpgc.toml
+just install  # install tmpgc to ~/.local/bin and start the hourly timer
+#+end_src
+
+=just config= keeps an existing file; =just config -f= replaces it. =just install= requires a valid configuration.
+
+* Running
+
+The timer runs tmpgc. A manual run prints failures and a summary; =-v= also lists each decision:
+
+#+begin_src sh
+tmpgc -v
+#+end_src
+
+#+begin_example
+REMOVING (MSBuildTemp idle >60min, 2.1M): /tmp/MSBuildTempuser
+SKIP (MSBuild socket pid 4242 alive): /tmp/MSBuild4242
+Done: 1 items removed (2.1M freed), 1 active items kept, 0 failed. /tmp holds 1.4G.
+#+end_example
+
+Each line names an action, the rule label, the reason and the path:
+
+- REMOVING :: the entry is removed.
+- SKIP :: the entry stays.
+- FAILED :: removal failed; printed to standard error, also without =-v=.
+
+The summary counts removals, kept entries and failures, and the space removal frees, excluding space a process still holds open. It ends with the used space of each filesystem searched, as df reports it.
+
+=-n= runs without side-effects.
+
+The exit status is 1 after a configuration error, an invalid option or a failed removal, otherwise 0.
+
+* Schedule
+
+The timer runs tmpgc hourly, with up to 5 minutes of random delay, and catches up on a run missed while the machine was off.
+
+#+begin_src sh
+systemctl --user list-timers tmpgc.timer
+journalctl --user -u tmpgc
+#+end_src
+
+* What tmpgc keeps
+
+An entry stays if:
+
+- another user owns it;
+- it is or contains a mount point;
+- it is a bound socket;
+- its rule's name pattern captures an owner PID and that process is running;
+- a live process has a file open, a memory mapping or its working directory at or under it, unless the rule's =in_use= allows removal;
+- anything at or under it was modified, changed status or read within its rule's =idle= window. Listing a directory does not count.
+
+tmpgc sees use only in processes whose /proc entries it can read. A non-dumpable process hides its use.
+
+* Configuration
+
+The file is $XDG_CONFIG_HOME/tmpgc.toml, by default ~/.config/tmpgc.toml. tmpgc does not run without it.
+
+The file is an ordered list of =[[rule]]= tables. The first rule matching an entry claims it. A selected directory covers everything under it, and no later rule selects a directory containing an earlier selection.
+
+#+begin_src toml
+[[rule]]
+label = "MSBuildTemp"
+under = ["/tmp"]
+depth = 2
+type = "directory"
+name = 'MSBuildTemp.*'
+idle = "60min"
+#+end_src
+
+- label :: required; names the rule in output.
+- paths :: absolute globs. =*=, =?= and =[...]= match within one path component. Hidden names match only a pattern starting with a dot. A trailing =/= matches directories only.
+- under :: absolute directories to search; requires =depth=. A rule sets exactly one of =paths= and =under=. No rule selects these directories or their parents.
+- depth :: levels below each =under= directory; 1 selects its direct contents. Searches do not enter other mounted filesystems.
+- type :: =socket=, =fifo=, =directory= or =file=.
+- name :: Python regular expression matching the whole entry name. A group named =pid= captures an owner PID; a group named =start=, with =pid=, captures the owner's start time in clock ticks since boot. Single-quoted TOML strings need no backslash escaping.
+- empty :: =true= selects only empty directories and zero-length files, and removes them only while they stay empty. Not with =socket= or =fifo=.
+- min_size :: minimum allocated space of the entry and everything under it: bytes, or a K, M, G or T suffix in powers of 1024.
+- idle :: required; time without activity before removal. =0= removes an entry once nothing else keeps it.
+- in_use :: effect of a live process using the entry. =true=, the default, keeps the entry while used. =false= ignores use. A duration longer than =idle= keeps a used entry until it has been idle that long. Not with =socket=.
+
+Durations are whole seconds or a sum of terms such as =90s=, =30min= or =30m=, =12h=, =1d= and =2w=, as in ="1h 30min"=.
+
+In =paths= and =under=, =%U= expands to your UID and =%%= to a literal =%=.
+
+The default rules cover .NET, MSBuild and NuGet, Unity, Mono, Emacs native compilation, the Node.js compile cache, Claude Code scratch directories, idle entries of 100 MiB or more, and /dev/shm segments. Comments in the file describe each rule.
+
+* Uninstallation
+
+#+begin_src sh
+just uninstall
+#+end_src
+
+This stops the timer, unlinks the units and removes the command. The configuration file stays.
