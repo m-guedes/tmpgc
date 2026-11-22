@@ -1,7 +1,7 @@
 #+TITLE: tmpgc
 #+DESCRIPTION: Install, configure and run tmpgc.
 
-tmpgc removes stale entries own by the running user under /tmp and /dev/shm. Rules in a configuration file select the entries. Entries a live process still uses stay. A systemd user timer runs it hourly.
+tmpgc removes stale entries owned by the running user under /tmp and /dev/shm. Rules in a configuration file select the entries. Entries a live process still uses stay. A systemd user timer runs it hourly.
 
 * Requirements
 
