@@ -5,36 +5,37 @@ units := justfile_directory() / "systemd"
 service := units / "tmpgc.service"
 timer := units / "tmpgc.timer"
 default_config := justfile_directory() / "tmpgc.toml"
-ruff := "ruff@0.17.5"
-basedpyright := "basedpyright@1.40.2"
 
 [private]
 default:
     @just --list
 
+setup:
+    uv sync --locked
+
 # Run tmpgc from this checkout: just run -n -v
 run *args:
-    uv run tmpgc "$@"
+    uv run --locked tmpgc "$@"
 
 # Format Python files.
 fmt:
-    uvx {{ ruff }} format .
+    uv run --locked ruff format .
 
 # Check the default configuration, Python code and the installed service command.
 lint: (_check-config default_config)
-    uvx {{ ruff }} format --check .
-    uvx {{ ruff }} check .
-    uvx {{ basedpyright }}
+    uv run --locked ruff format --check .
+    uv run --locked ruff check --no-fix .
+    uv run --locked basedpyright
     systemd-analyze --user verify {{ quote(service) }} {{ quote(timer) }}
 
 # Run the cleanup rule tests.
 test:
-    uv run python -m unittest discover -s tests -t .
+    uv run --locked python -m unittest discover -s tests -t .
 
 # Install the default configuration. Use -f to replace an existing file.
 config flag="":
     #!/usr/bin/env bash
-    uv run python - {{ quote(default_config) }} "$1" <<'PY'
+    uv run --locked python - {{ quote(default_config) }} "$1" <<'PY'
     import os
     import sys
     from pathlib import Path
@@ -68,7 +69,7 @@ config flag="":
 [private]
 _check-config path="":
     #!/usr/bin/env bash
-    uv run python - "$1" <<'PY'
+    uv run --locked python - "$1" <<'PY'
     import os
     import sys
     from pathlib import Path
