@@ -170,6 +170,8 @@ idle = "7d"
 label = "large entry"
 under = ["/tmp"]
 depth = 1
+# Never remove the Claude Code or Codex per-UID directory whole.
+exclude = ["/tmp/claude-%U", "/tmp/codex-%U"]
 min_size = "100M"
 idle = "1d"
 
