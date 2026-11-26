@@ -1,7 +1,7 @@
 #+TITLE: tmpgc
 #+DESCRIPTION: Install, configure and run tmpgc.
 
-tmpgc removes stale entries owned by the running user under /tmp and /dev/shm. Rules in a configuration file select the entries. Entries a live process still uses stay. A systemd user timer runs it hourly.
+tmpgc removes stale entries owned by the running user under =/tmp= and =/dev/shm=. Rules in a configuration file select the entries. Entries a live process still uses stay. A systemd user timer runs it hourly.
 
 * Requirements
 
@@ -64,11 +64,11 @@ An entry stays if:
 - a live process has a file open, a memory mapping or its working directory at or under it, unless the rule's =in_use= allows removal;
 - anything at or under it was modified, changed status or read within its rule's =idle= window. Listing a directory does not count.
 
-tmpgc sees use only in processes whose /proc entries it can read. A non-dumpable process hides its use.
+tmpgc sees use only in processes whose =/proc= entries it can read. A non-dumpable process hides its use.
 
 * Configuration
 
-The file is $XDG_CONFIG_HOME/tmpgc.toml, by default ~/.config/tmpgc.toml. tmpgc does not run without it.
+The file is =$XDG_CONFIG_HOME/tmpgc.toml=, by default =~/.config/tmpgc.toml=. tmpgc does not run without it.
 
 The file is an ordered list of =[[rule]]= tables. The first rule matching an entry claims it. A selected directory covers everything under it, and no later rule selects a directory containing an earlier selection.
 
@@ -98,7 +98,7 @@ Durations are whole seconds or a sum of terms such as =90s=, =30min= or =30m=, =
 
 In =paths=, =under= and =exclude=, =%U= expands to your UID and =%%= to a literal =%=.
 
-The default rules cover .NET, MSBuild and NuGet, Unity, Mono, Emacs native compilation, the Node.js compile cache, Claude Code scratch directories, idle entries of 100 MiB or more, and /dev/shm segments. Comments in the file describe each rule.
+The default rules cover .NET, MSBuild and NuGet, Unity, Mono, Emacs native compilation, the Node.js compile cache, Claude Code scratch directories, idle entries of 100 MiB or more, and =/dev/shm= segments. Comments in the file describe each rule.
 
 * Uninstallation
 
