@@ -85,6 +85,7 @@ idle = "60min"
 - label :: required; names the rule in output.
 - paths :: absolute globs. =*=, =?= and =[...]= match within one path component. Hidden names match only a pattern starting with a dot. A trailing =/= matches directories only.
 - under :: absolute directories to search; requires =depth=. A rule sets exactly one of =paths= and =under=. No rule selects these directories or their parents.
+- exclude :: absolute globs, matched as in =paths=. The rule selects no match, nothing under a match and no directory containing one. Other rules can still select them.
 - depth :: levels below each =under= directory; 1 selects its direct contents. Searches do not enter other mounted filesystems.
 - type :: =socket=, =fifo=, =directory= or =file=.
 - name :: Python regular expression matching the whole entry name. A group named =pid= captures an owner PID; a group named =start=, with =pid=, captures the owner's start time in clock ticks since boot. Single-quoted TOML strings need no backslash escaping.
@@ -95,7 +96,7 @@ idle = "60min"
 
 Durations are whole seconds or a sum of terms such as =90s=, =30min= or =30m=, =12h=, =1d= and =2w=, as in ="1h 30min"=.
 
-In =paths= and =under=, =%U= expands to your UID and =%%= to a literal =%=.
+In =paths=, =under= and =exclude=, =%U= expands to your UID and =%%= to a literal =%=.
 
 The default rules cover .NET, MSBuild and NuGet, Unity, Mono, Emacs native compilation, the Node.js compile cache, Claude Code scratch directories, idle entries of 100 MiB or more, and /dev/shm segments. Comments in the file describe each rule.
 

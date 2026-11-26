@@ -14,6 +14,7 @@ _RULE_KEYS = {
     "label",
     "paths",
     "under",
+    "exclude",
     "depth",
     "type",
     "name",
@@ -74,6 +75,7 @@ class Rule:
     empty: bool = False
     min_size: int = 0
     held_idle: timedelta | None = None
+    exclude: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.label:
@@ -128,15 +130,18 @@ def _expand_specifiers(path: str, key: str, uid: int) -> str:
     return _SPECIFIER.sub(replace, path)
 
 
+def _absolute_paths(value: object, key: str, uid: int) -> tuple[str, ...]:
+    return tuple(
+        _expand_specifiers(path, key, uid) for path in _absolute_strings(value, key)
+    )
+
+
 def _selector(table: dict[str, object], uid: int) -> Patterns | Search:
     has_paths = "paths" in table
     if has_paths == ("under" in table):
         raise ConfigError("exactly one of paths or under is required")
     key = "paths" if has_paths else "under"
-    paths = tuple(
-        _expand_specifiers(path, key, uid)
-        for path in _absolute_strings(table[key], key)
-    )
+    paths = _absolute_paths(table[key], key, uid)
     if has_paths:
         if "depth" in table:
             raise ConfigError("depth can only be used with under")
@@ -220,6 +225,14 @@ def _held_idle(value: object, idle: timedelta) -> timedelta | None:
     return duration
 
 
+def _exclude(table: dict[str, object], uid: int) -> tuple[str, ...]:
+    if "exclude" not in table:
+        return ()
+    if not (globs := _absolute_paths(table["exclude"], "exclude", uid)):
+        raise ConfigError("exclude must contain at least one glob")
+    return globs
+
+
 def _parse_rule(table: dict[str, object], uid: int) -> Rule:
     if unknown := table.keys() - _RULE_KEYS:
         raise ConfigError(f"unknown keys: {', '.join(sorted(unknown))}")
@@ -244,6 +257,7 @@ def _parse_rule(table: dict[str, object], uid: int) -> Rule:
         empty=empty,
         min_size=_size(table.get("min_size", 0)),
         held_idle=_held_idle(table.get("in_use", True), idle),
+        exclude=_exclude(table, uid),
     )
 
 

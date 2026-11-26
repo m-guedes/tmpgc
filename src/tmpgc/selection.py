@@ -36,12 +36,19 @@ def candidates(context: Context) -> Iterator[tuple[Entry, Rule]]:
     ancestors: set[PurePosixPath] = set()
     selected: list[tuple[Entry, Rule]] = []
     for rule in context.rules:
+        excluded = frozenset(
+            entry.location for pattern in rule.exclude for entry in expand(pattern)
+        )
+        # Removing a directory would remove the excluded entries under it.
+        shielded = with_ancestors(excluded)
         found: list[tuple[PurePosixPath, Entry]] = []
         for entry in _entries(rule.select, context.mounts):
             path = entry.location
             if (
                 path not in protected
                 and path not in claimed
+                and path not in shielded
+                and excluded.isdisjoint(path.parents)
                 and matches(entry, rule, context)
             ):
                 claimed.add(path)
