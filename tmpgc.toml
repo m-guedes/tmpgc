@@ -83,9 +83,52 @@ idle = "1d"
 
 # Discard idle Claude Code scratch entries for this UID.
 [[rule]]
-label = "scratch"
+label = "Claude Code scratch"
 paths = ["/tmp/claude-%U/*/*", "/tmp/*/claude-%U/*/*"]
 idle = "3d"
+
+# Discard idle entries that Claude Code and the commands it runs create directly in its per-UID
+# directory. Claude Code's own entries there get the same idle window as its session directories.
+#
+# Note that Claude Code keeps its own scratch under /tmp/claude-%U, but the commands it runs outside
+# its sandbox inherit TMPDIR and pollute /tmp. Merge the following configuration into the
+# configuration file at ~/.claude/settings.json to make them create scratch in the same directory:
+#
+# "env": {
+#   "CLAUDE_CODE_TMPDIR": "/tmp",
+#   "TMPDIR": "/tmp/claude-1000"
+# }
+#
+# Claude Code places its directory under $CLAUDE_CODE_TMPDIR, else $TMPDIR, so setting TMPDIR alone
+# nests it in /tmp/claude-1000/claude-1000. Its sandbox already exports this TMPDIR to commands.
+[[rule]]
+label = "Claude Code tool scratch"
+under = ["/tmp/claude-%U"]
+depth = 1
+# Keep project directories, whose names start with "-"; the previous rule covers their sessions.
+name = '(?s)(?!-).+'
+idle = "3d"
+
+# Discard idle scratch entries for this UID created by Codex.
+#
+# Note that Codex pollutes /tmp with scratch directories by default. Add the following configuration
+# to the configuration file at ~/.codex/config.toml to make it create scratch and other artifacts
+# under a unified directory:
+#
+# [shell_environment_policy.set]
+# TMPDIR = "/tmp/codex-1000"
+#
+# [sandbox_workspace_write]
+# writable_roots = ["/tmp/codex-1000"]
+# exclude_tmpdir_env_var = false  # Allow $TMPDIR
+# exclude_slash_tmp = true        # Disallow /tmp
+[[rule]]
+label = "Codex scratch"
+under = ["/tmp/codex-%U"]
+depth = 1
+# Keep hidden entries and the shared Bubblewrap registry.
+name = '(?s)(?!\.|codex-bwrap-synthetic-mount-targets-[0-9]+\Z).+'
+idle = "1d"
 
 # Unity Editor compiler pre-warm tests carry the editor's PID.
 [[rule]]
