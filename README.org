@@ -3,6 +3,19 @@
 
 tmpgc removes stale entries owned by the running user under =/tmp= and =/dev/shm=. Rules in a configuration file select the entries. Entries a live process still uses stay. A systemd user timer runs it hourly.
 
+* Rationale
+
+systemd-tmpfiles removes entries by age alone; Ubuntu 26.04 sets 10 days for =/tmp=. tmpgc adds:
+
+- It keeps entries a live process has open, mapped or as its working directory. systemd-tmpfiles deletes them.
+- It judges a tree as a whole. systemd-tmpfiles prunes stale files inside a tree still in use.
+- It removes entries named after a PID once that process exits.
+- It selects entries by name, type or size, each rule with its own idle window.
+
+tmpwatch also ages each file alone. Its only process check is an optional fuser call per file.
+
+systemd-tmpfiles keeps running, and its sweep skips these checks.
+
 * Requirements
 
 Linux with a systemd user session, uv and just. uv provides Python 3.14.
